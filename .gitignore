@@ -1,0 +1,15 @@
+# Rust
+/target
+**/*.rs.bk
+
+# npurag local index / database artifacts (never commit these)
+*.db
+*.db-shm
+*.db-wal
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Note: npurag is a binary crate — DO commit Cargo.lock (it is intentionally not ignored).
