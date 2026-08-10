@@ -169,21 +169,26 @@ impl Store {
     /// Stream every stored vector with the path it came from.
     ///
     /// Chunk text is deliberately left behind: it dwarfs the vectors, and only
-    /// the handful of rows that survive ranking ever need to be read.
+    /// the handful of rows that survive ranking ever need to be read. The
+    /// decoded vector is handed out by reference from a buffer reused across
+    /// rows — at fifty thousand chunks, one allocation per row is the single
+    /// largest cost in a search.
     pub fn scan_vectors<F>(&self, mut visit: F) -> Result<()>
     where
-        F: FnMut(i64, &str, Vec<f32>),
+        F: FnMut(i64, &str, &[f32]),
     {
         let mut stmt = self.conn.prepare(
             "SELECT chunks.id, files.path, chunks.vec
              FROM chunks JOIN files ON files.id = chunks.file_id",
         )?;
         let mut rows = stmt.query([])?;
+        let mut vector = Vec::new();
         while let Some(row) = rows.next()? {
             let id: i64 = row.get(0)?;
             let path: String = row.get(1)?;
-            let blob: Vec<u8> = row.get(2)?;
-            visit(id, &path, blob_to_vec(&blob)?);
+            let blob = row.get_ref(2)?.as_blob()?;
+            decode_into(blob, &mut vector)?;
+            visit(id, &path, &vector);
         }
         Ok(())
     }
@@ -398,6 +403,23 @@ pub fn vec_to_blob(vector: &[f32]) -> Vec<u8> {
         blob.extend_from_slice(&value.to_le_bytes());
     }
     blob
+}
+
+/// Decode a stored vector into an existing buffer, reusing its allocation.
+pub fn decode_into(blob: &[u8], out: &mut Vec<f32>) -> Result<()> {
+    if !blob.len().is_multiple_of(4) {
+        return Err(anyhow!(
+            "a stored vector is {} bytes, which is not a whole number of f32 values",
+            blob.len()
+        ));
+    }
+    out.clear();
+    out.reserve(blob.len() / 4);
+    out.extend(
+        blob.chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])),
+    );
+    Ok(())
 }
 
 pub fn blob_to_vec(blob: &[u8]) -> Result<Vec<f32>> {

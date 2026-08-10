@@ -44,6 +44,19 @@ pub struct IndexReport {
     pub chunks_written: usize,
 }
 
+/// What the indexer is doing, for callers that want to show progress.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Progress<'a> {
+    /// The walk is done and the size of the job is known.
+    Planned { total: usize },
+    /// A file has been dealt with, one way or another.
+    Advanced {
+        done: usize,
+        total: usize,
+        path: &'a Path,
+    },
+}
+
 pub fn index_dir(
     store: &mut Store,
     backend: &dyn Backend,
@@ -51,6 +64,26 @@ pub fn index_dir(
     walk_options: &WalkOptions,
     chunk_options: &ChunkOptions,
     options: &IndexOptions,
+) -> Result<IndexReport> {
+    index_dir_with_progress(
+        store,
+        backend,
+        root,
+        walk_options,
+        chunk_options,
+        options,
+        &|_| {},
+    )
+}
+
+pub fn index_dir_with_progress(
+    store: &mut Store,
+    backend: &dyn Backend,
+    root: &Path,
+    walk_options: &WalkOptions,
+    chunk_options: &ChunkOptions,
+    options: &IndexOptions,
+    progress: &dyn Fn(Progress),
 ) -> Result<IndexReport> {
     let root = root
         .canonicalize()
@@ -73,9 +106,17 @@ pub fn index_dir(
         ..Default::default()
     };
 
-    let mut seen: HashSet<String> = HashSet::with_capacity(candidates.len());
+    let total = candidates.len();
+    progress(Progress::Planned { total });
 
-    for candidate in candidates {
+    let mut seen: HashSet<String> = HashSet::with_capacity(total);
+
+    for (done, candidate) in candidates.into_iter().enumerate() {
+        progress(Progress::Advanced {
+            done,
+            total,
+            path: &candidate.path,
+        });
         let path = candidate.path.to_string_lossy().into_owned();
         seen.insert(path.clone());
 

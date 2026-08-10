@@ -30,6 +30,8 @@ pdf-extract = { version = "0.12.0", optional = true }
 html2text = { version = "0.17.1", optional = true }
 dotext = { version = "0.1.1", optional = true }
 notify = "8.2.0"
+indicatif = "0.18.6"
+simsimd = { version = "6.5.16", optional = true }
 
 [features]
 # Extractors are opt-in: they pull heavy dependency trees, and an index of
@@ -40,6 +42,10 @@ pdf = ["dep:pdf-extract"]
 office = ["dep:dotext"]
 html = ["dep:html2text"]
 extractors = ["pdf", "office", "html"]
+# Hand-written cosine is already fast enough for a personal index; this swaps in
+# simsimd's kernels for the cases where it is not.
+simd = ["dep:simsimd"]
+simsimd = ["dep:simsimd"]
 
 [lints.rust]
 unsafe_code = "forbid"

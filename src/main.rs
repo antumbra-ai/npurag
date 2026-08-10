@@ -4,11 +4,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
+use indicatif::{ProgressBar, ProgressStyle};
 
 use npurag::ask::{ask, origin_of, AskOptions};
 use npurag::backend::{Backend, MockBackend, OpenAiBackend};
 use npurag::config::{self, Config, Overrides};
-use npurag::index::{index_dir, IndexOptions};
+use npurag::index::{index_dir_with_progress, IndexOptions, Progress};
 use npurag::search::{search, SearchOptions};
 use npurag::store::Store;
 use npurag::watch::{watch, Pipeline, WatchOptions};
@@ -313,6 +314,17 @@ fn search_cmd(
     emit(&out)
 }
 
+/// A progress bar on stderr, so piping stdout stays clean. indicatif hides it
+/// automatically when stderr is not a terminal, which keeps cron logs readable.
+fn new_progress_bar(total: u64) -> ProgressBar {
+    let bar = ProgressBar::new(total);
+    bar.set_style(
+        ProgressStyle::with_template("{spinner} {pos}/{len} {wide_msg}")
+            .unwrap_or_else(|_| ProgressStyle::default_bar()),
+    );
+    bar
+}
+
 fn prune_cmd(config: &Config) -> Result<()> {
     use std::fmt::Write as _;
 
@@ -443,14 +455,34 @@ fn index(
     store.bind_to_model(&active.name, &active.embed_model, &root)?;
 
     let walk_options = config.walk_options(include, exclude, max_size, follow_symlinks);
-    let report = index_dir(
+    let bar = std::cell::RefCell::new(None::<ProgressBar>);
+    let report = index_dir_with_progress(
         &mut store,
         active.backend.as_ref(),
         &root,
         &walk_options,
         &config.chunk_options(),
         &options,
+        &|event| match event {
+            Progress::Planned { total } => {
+                *bar.borrow_mut() = Some(new_progress_bar(total as u64));
+            }
+            Progress::Advanced { done, path, .. } => {
+                if let Some(bar) = bar.borrow().as_ref() {
+                    bar.set_position(done as u64);
+                    bar.set_message(
+                        path.file_name()
+                            .unwrap_or(path.as_os_str())
+                            .to_string_lossy()
+                            .into_owned(),
+                    );
+                }
+            }
+        },
     )?;
+    if let Some(bar) = bar.borrow().as_ref() {
+        bar.finish_and_clear();
+    }
 
     let mut out = String::new();
     writeln!(out, "root         {}", root.display())?;

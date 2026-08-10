@@ -44,7 +44,8 @@ extractors → freshness → scale.
 
 ```bash
 cargo build
-cargo test        # runs against the mock backend — no NPU needed
+cargo test                 # runs against the mock backend — no NPU needed
+cargo install --path .     # installs npurag to ~/.cargo/bin
 ```
 
 Text, code and Markdown are indexed out of the box. PDF, HTML and Office documents need
@@ -57,6 +58,18 @@ cargo build --features extractors      # or: --features pdf,html,office
 Without them, those files are skipped and counted rather than failing the run. npurag can
 also fall back to `pdftotext` or `pandoc` when they are installed locally; set
 `external_extractors = false` in the config to stop it spawning any process at all.
+
+| Feature | What it adds |
+|---|---|
+| `pdf` | PDF text extraction |
+| `html` | HTML to readable text |
+| `office` | DOCX, PPTX, XLSX, ODT, ODP |
+| `extractors` | all three of the above |
+| `simd` | simsimd kernels for cosine similarity |
+
+Search is an exact scan over every stored vector. That holds up well past fifty thousand
+chunks — the test suite builds an index that size and searches it — so `simd` is a knob
+for unusually large collections rather than something you need.
 
 ## Contributing
 

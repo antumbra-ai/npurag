@@ -74,6 +74,15 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() {
         return 0.0;
     }
+    #[cfg(feature = "simd")]
+    {
+        use simsimd::SpatialSimilarity;
+        // simsimd reports a distance; a similarity is one minus that. It
+        // returns None only for mismatched lengths, which is handled above.
+        if let Some(distance) = f32::cosine(a, b) {
+            return 1.0 - distance as f32;
+        }
+    }
     let mut dot = 0.0f32;
     let mut norm_a = 0.0f32;
     let mut norm_b = 0.0f32;
@@ -112,7 +121,7 @@ pub fn search(
         if filter.as_ref().is_some_and(|f| !f.matches(path)) {
             return;
         }
-        scored.push((cosine(&query_vector, &vector), id, path.to_string()));
+        scored.push((cosine(&query_vector, vector), id, path.to_string()));
     })?;
 
     // Ties are broken by chunk id so that equal scores rank deterministically.
