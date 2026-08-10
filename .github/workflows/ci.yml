@@ -1,0 +1,91 @@
+name: CI
+
+# Everything here runs on a plain GitHub runner: no NPU, no GPU, no inference
+# server. Tests reach the built-in mock backend instead, which is the whole
+# point of putting the inference path behind a trait.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: fmt, clippy, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install the stable toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version
+
+      - name: Cache cargo registry and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      # -D warnings covers rustc lints as well as clippy's, but only for this
+      # crate — putting it in RUSTFLAGS would fail the build on warnings coming
+      # out of dependencies.
+      - name: Lints
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Tests
+        run: cargo test --all-features --locked
+
+  msrv:
+    name: Minimum supported Rust version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # Read the version from the manifest so the two cannot drift apart.
+      - name: Read rust-version from Cargo.toml
+        id: msrv
+        run: |
+          version=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
+          echo "Declared MSRV: $version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install the declared toolchain
+        run: |
+          rustup toolchain install ${{ steps.msrv.outputs.version }} --profile minimal
+          rustup default ${{ steps.msrv.outputs.version }}
+          rustc --version
+
+      - name: Cache cargo registry and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-msrv-${{ steps.msrv.outputs.version }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-msrv-${{ steps.msrv.outputs.version }}-
+
+      - name: Check
+        run: cargo check --all-targets --all-features --locked

@@ -2,7 +2,9 @@
 name = "npurag"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+# Floor imposed by the dependency tree (time / cookie_store, via ureq).
+# CI verifies this against a real toolchain rather than trusting the number.
+rust-version = "1.88"
 authors = ["Grzegorz Oleksy"]
 description = "On-device semantic search and RAG over a local directory, via any OpenAI-compatible backend"
 repository = "https://github.com/antumbra-ai/npurag"

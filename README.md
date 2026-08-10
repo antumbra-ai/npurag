@@ -1,5 +1,7 @@
 # npurag
 
+[![CI](https://github.com/antumbra-ai/npurag/actions/workflows/ci.yml/badge.svg)](https://github.com/antumbra-ai/npurag/actions/workflows/ci.yml)
+
 **On-device semantic search & RAG for any folder — running on your NPU.**
 
 `npurag` turns a directory on your machine into an always-fresh semantic index you can
