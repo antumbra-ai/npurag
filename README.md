@@ -17,6 +17,9 @@ NPU is the always-on background tier and your GPU or the cloud handle the heavy 
 > backend, and against a built-in mock with no hardware at all. Not yet exercised on real
 > NPU silicon — reports welcome.
 
+New here? [`USAGE.md`](./USAGE.md) is the full manual — every command, the config file and
+what to do when something looks wrong. Po polsku: [`USAGE_PL.md`](./USAGE_PL.md).
+
 ## What it does
 
 - `npurag index <dir>` — index a whole folder (any file types), incrementally.

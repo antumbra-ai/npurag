@@ -61,8 +61,12 @@ Source: "..\..\dist\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\NOTICE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\..\README.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\USAGE.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\USAGE_PL.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
+Name: "{group}\How to use {#AppName}"; Filename: "{app}\USAGE.md"
+Name: "{group}\Jak używać {#AppName} (PL)"; Filename: "{app}\USAGE_PL.md"
 Name: "{group}\{#AppName} on GitHub"; Filename: "{#AppURL}"
 
 [Code]

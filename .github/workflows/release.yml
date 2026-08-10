@@ -79,6 +79,9 @@ jobs:
           cp target/x86_64-unknown-linux-musl/release/npurag "dist/$name"
           chmod +x "dist/$name"
           (cd dist && sha256sum "$name" > "$name.sha256")
+          # The Linux download is a bare binary with no installer to carry the
+          # manual, so ship it alongside as a release asset.
+          cp USAGE.md USAGE_PL.md dist/
           ls -lh dist
 
       - uses: actions/upload-artifact@v7
