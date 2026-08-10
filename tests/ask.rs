@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use npurag::ask::{ask, build_prompt, select_context, AskOptions};
+use npurag::ask::{ask, build_prompt, origin_of, select_context, AskOptions};
 use npurag::backend::{Backend, Message, MockBackend, Role};
 use npurag::chunk::ChunkOptions;
 use npurag::index::{index_dir, IndexOptions};
@@ -218,4 +218,53 @@ fn the_answer_is_whatever_the_backend_said() {
         answer.answer.starts_with(prefix),
         "the answer should be the model's, unedited"
     );
+}
+
+#[test]
+fn an_answer_names_the_index_it_came_from() {
+    let store = indexed_fixtures();
+    let answer = ask(
+        &store,
+        &MockBackend::new(),
+        "how is the backup configured?",
+        &AskOptions::default(),
+    )
+    .expect("answers");
+
+    let root = answer.origin.root.expect("the index records its root");
+    assert!(root.ends_with("tests/fixtures"), "got {root}");
+    assert_eq!(answer.origin.files, 3);
+    assert!(answer.origin.chunks >= 3);
+}
+
+#[test]
+fn the_origin_records_which_model_built_the_index() {
+    let store = indexed_fixtures();
+    store
+        .bind_to_model("amd-flm", "embeddinggemma-300m", Path::new("/tmp/notes"))
+        .expect("binds");
+
+    let origin = origin_of(&store).expect("reads origin");
+    assert_eq!(origin.backend.as_deref(), Some("amd-flm"));
+    assert_eq!(origin.embed_model.as_deref(), Some("embeddinggemma-300m"));
+}
+
+#[test]
+fn even_an_unanswerable_question_reports_its_origin() {
+    let store = Store::open_in_memory().unwrap();
+    store
+        .bind_to_model("mock", "mock", Path::new("/tmp/empty"))
+        .unwrap();
+
+    let answer = ask(
+        &store,
+        &MockBackend::new(),
+        "anything?",
+        &AskOptions::default(),
+    )
+    .expect("answers");
+
+    assert!(answer.sources.is_empty());
+    assert_eq!(answer.origin.root.as_deref(), Some("/tmp/empty"));
+    assert_eq!(answer.origin.files, 0);
 }

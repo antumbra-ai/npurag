@@ -56,6 +56,11 @@ pub fn index_dir(
         .canonicalize()
         .with_context(|| format!("could not resolve {}", root.display()))?;
 
+    // Record what this index covers. The indexer is the only place that knows
+    // for certain, and an answer that cannot name its collection is only half a
+    // citation.
+    store.meta_set(crate::store::meta_keys::ROOT_PATH, &root.to_string_lossy())?;
+
     if options.reindex {
         store.clear()?;
     }

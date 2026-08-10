@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 
-use npurag::ask::{ask, AskOptions};
+use npurag::ask::{ask, origin_of, AskOptions};
 use npurag::backend::{Backend, MockBackend, OpenAiBackend};
 use npurag::config::{self, Config, Overrides};
 use npurag::index::{index_dir, IndexOptions};
@@ -285,7 +285,11 @@ fn search_cmd(
     let hits = search(&store, active.backend.as_ref(), query, &options)?;
 
     if json {
-        let payload = serde_json::json!({ "query": query, "hits": hits });
+        let payload = serde_json::json!({
+            "query": query,
+            "origin": origin_of(&store)?,
+            "hits": hits,
+        });
         return emit(&format!("{}\n", serde_json::to_string_pretty(&payload)?));
     }
 
@@ -397,8 +401,11 @@ fn ask_cmd(
     let mut out = String::new();
     writeln!(out, "{}", answer.answer.trim())?;
     if show_sources && !answer.sources.is_empty() {
-        let root = store.stats()?.root_path;
-        writeln!(out, "\nSources:")?;
+        let root = answer.origin.root.clone();
+        match &root {
+            Some(root) => writeln!(out, "\nSources (index of {root}):")?,
+            None => writeln!(out, "\nSources:")?,
+        }
         for source in &answer.sources {
             writeln!(
                 out,

@@ -40,11 +40,39 @@ pub struct Source {
     pub score: f32,
 }
 
+/// Which index answered, so a reply can be traced to a collection and not just
+/// to a file path. One index covers one root directory, built by one embedding
+/// model on one backend — all three matter when several indexes exist.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct Origin {
+    /// The directory this index was built from.
+    pub root: Option<String>,
+    pub backend: Option<String>,
+    pub embed_model: Option<String>,
+    /// How much of the index the question was matched against.
+    pub files: i64,
+    pub chunks: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Answer {
     pub question: String,
     pub answer: String,
+    /// Where the answer came from, at the level of the whole collection.
+    pub origin: Origin,
+    /// Where it came from, excerpt by excerpt.
     pub sources: Vec<Source>,
+}
+
+pub fn origin_of(store: &Store) -> Result<Origin> {
+    let stats = store.stats()?;
+    Ok(Origin {
+        root: stats.root_path,
+        backend: stats.backend,
+        embed_model: stats.embed_model,
+        files: stats.files,
+        chunks: stats.chunks,
+    })
 }
 
 const SYSTEM_PROMPT: &str = "\
@@ -106,6 +134,7 @@ pub fn ask(
         return Ok(Answer {
             question: question.to_string(),
             answer: "The index has nothing to answer this from.".to_string(),
+            origin: origin_of(store)?,
             sources: Vec::new(),
         });
     }
@@ -117,6 +146,7 @@ pub fn ask(
     Ok(Answer {
         question: question.to_string(),
         answer,
+        origin: origin_of(store)?,
         sources: selected
             .iter()
             .enumerate()
