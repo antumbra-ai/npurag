@@ -37,6 +37,24 @@ For a scheduled refresh instead of a running process, see the systemd user units
   - **Intel (Lunar Lake)** — OpenVINO Model Server (default `localhost:8000`).
 - No NPU? Development and tests run against a built-in **mock backend** — no hardware required.
 
+## Install
+
+Prebuilt downloads are attached to each [release](https://github.com/antumbra-ai/npurag/releases):
+
+- **Linux** — one statically linked binary, no dependencies and no installer:
+
+  ```bash
+  curl -LO https://github.com/antumbra-ai/npurag/releases/latest/download/npurag-<version>-linux-x86_64
+  chmod +x npurag-<version>-linux-x86_64
+  sudo mv npurag-<version>-linux-x86_64 /usr/local/bin/npurag
+  ```
+
+- **Windows** — run the `-setup.exe` installer. It installs per user, needs no
+  administrator, and can add npurag to your `PATH`.
+
+Every file ships with a `.sha256` beside it. Both builds include the PDF, HTML and Office
+extractors, since a downloaded binary cannot have Cargo features turned on afterwards.
+
 ## Build
 
 Built in milestones (M0–M6): skeleton & backend → index → search → ask (RAG) →

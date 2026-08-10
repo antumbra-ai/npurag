@@ -47,6 +47,16 @@ extractors = ["pdf", "office", "html"]
 simd = ["dep:simsimd"]
 simsimd = ["dep:simsimd"]
 
+[profile.release]
+# Release binaries are downloaded, not built, so size and speed are worth the
+# longer compile.
+lto = true
+codegen-units = 1
+strip = true
+# Deliberately NOT panic = "abort": the PDF extractor relies on catch_unwind to
+# survive a malformed file, and aborting would turn one bad document into a
+# failed run over thousands of good ones.
+
 [lints.rust]
 unsafe_code = "forbid"
 

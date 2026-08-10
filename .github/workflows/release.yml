@@ -1,0 +1,168 @@
+name: Release
+
+# Builds the two things a user actually downloads:
+#   * one statically linked Linux binary that runs on any distribution
+#   * a Windows installer that puts npurag on the PATH
+#
+# Tag a commit to publish (`git tag -a v0.1.0 -m … && git push origin v0.1.0`).
+# Running it by hand builds and uploads the artifacts without publishing
+# anything, which is how to check a change to this workflow safely.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  # Everything the extractors can read is worth having in a download; someone
+  # fetching a binary cannot turn a Cargo feature on afterwards.
+  FEATURES: extractors
+
+jobs:
+  linux:
+    name: Linux (static, x86_64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Work out the version
+        id: version
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="0.0.0-dev+$(git rev-parse --short HEAD)"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Building $version"
+
+      - name: Install the musl toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add x86_64-unknown-linux-musl
+          # rusqlite compiles SQLite from C, so the musl target needs a C
+          # compiler that targets musl as well.
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl --features "$FEATURES"
+
+      - name: Check it is really self-contained
+        run: |
+          binary=target/x86_64-unknown-linux-musl/release/npurag
+          file "$binary"
+          # A dynamically linked binary would defeat the point of shipping one
+          # file, so fail loudly rather than publishing it.
+          if ldd "$binary" 2>&1 | grep -qv 'not a dynamic executable'; then
+            echo "::error::the binary is dynamically linked"
+            ldd "$binary" || true
+            exit 1
+          fi
+          "$binary" --version
+
+      - name: Stage the artifact
+        run: |
+          mkdir -p dist
+          name="npurag-${{ steps.version.outputs.version }}-linux-x86_64"
+          cp target/x86_64-unknown-linux-musl/release/npurag "dist/$name"
+          chmod +x "dist/$name"
+          (cd dist && sha256sum "$name" > "$name.sha256")
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux
+          path: dist/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows installer (x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Work out the version
+        id: version
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            # Inno Setup insists on a numeric VersionInfoVersion, so a manual
+            # run gets a placeholder rather than a git description.
+            version="0.0.0"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install the toolchain
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Build
+        run: cargo build --release --locked --features "$env:FEATURES"
+
+      - name: Stage the binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/npurag.exe dist/npurag.exe
+          ./dist/npurag.exe --version
+
+      - name: Make sure Inno Setup is available
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+          }
+          if (-not (Test-Path $iscc)) { throw "ISCC.exe not found at $iscc" }
+          echo "ISCC=$iscc" >> $env:GITHUB_ENV
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          & "$env:ISCC" "/DAppVersion=${{ steps.version.outputs.version }}" packaging\windows\npurag.iss
+
+      - name: Stage the artifacts
+        shell: bash
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          mv "dist/npurag.exe" "dist/npurag-$version-windows-x86_64.exe"
+          cd dist
+          for f in *.exe; do sha256sum "$f" > "$f.sha256"; done
+          ls -l
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish the release
+    needs: [linux, windows]
+    # Only a tag publishes. A manual run stops after building, so this workflow
+    # can be exercised without creating a release nobody asked for.
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -lh dist
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "npurag $GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag

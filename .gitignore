@@ -7,6 +7,9 @@
 *.db-shm
 *.db-wal
 
+# Release staging, produced by the release workflow and the Inno Setup script
+/dist
+
 # OS / editor
 .DS_Store
 .idea/
