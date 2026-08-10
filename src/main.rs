@@ -11,6 +11,7 @@ use npurag::config::{self, Config, Overrides};
 use npurag::index::{index_dir, IndexOptions};
 use npurag::search::{search, SearchOptions};
 use npurag::store::Store;
+use npurag::watch::{watch, Pipeline, WatchOptions};
 
 #[derive(Parser)]
 #[command(
@@ -99,6 +100,13 @@ enum Command {
     },
     /// Drop index entries whose files are gone.
     Prune,
+    /// Re-index continuously as files change.
+    Watch {
+        path: PathBuf,
+        /// Quiet period, in milliseconds, before a burst of changes is indexed.
+        #[arg(long, default_value_t = 750)]
+        debounce: u64,
+    },
 }
 
 /// A backend together with the names it was resolved from, which the index
@@ -180,7 +188,8 @@ fn main() -> Result<()> {
             !*no_sources,
             *json,
         ),
-        Command::Prune => bail!("`prune` arrives in M5"),
+        Command::Prune => prune_cmd(&config),
+        Command::Watch { path, debounce } => watch_cmd(&config, cli.mock, path, *debounce),
     }
 }
 
@@ -298,6 +307,71 @@ fn search_cmd(
         writeln!(out, "    {}", snippet(&hit.text, 140))?;
     }
     emit(&out)
+}
+
+fn prune_cmd(config: &Config) -> Result<()> {
+    use std::fmt::Write as _;
+
+    let (mut store, db_path) = open_index(config)?;
+    let removed = store.prune_missing()?;
+
+    let mut out = String::new();
+    if removed.is_empty() {
+        writeln!(out, "nothing to prune in {}", db_path.display())?;
+    } else {
+        let root = store.stats()?.root_path;
+        writeln!(out, "pruned {} file(s) no longer on disk:", removed.len())?;
+        for path in &removed {
+            writeln!(out, "  {}", display_path(path, root.as_deref()))?;
+        }
+    }
+    emit(&out)
+}
+
+fn watch_cmd(config: &Config, mock: bool, path: &Path, debounce_ms: u64) -> Result<()> {
+    let root = path
+        .canonicalize()
+        .map_err(|e| anyhow::anyhow!("could not resolve {}: {e}", path.display()))?;
+    let active = activate(config, mock)?;
+    let db_path = config.db_path_for(&root)?;
+
+    let mut store = Store::open(&db_path)?;
+    store.bind_to_model(&active.name, &active.embed_model, &root)?;
+
+    emit(&format!(
+        "watching {}\nindex    {}\nstop with Ctrl-C\n\n",
+        root.display(),
+        db_path.display()
+    ))?;
+
+    let pipeline = Pipeline {
+        walk: &config.walk_options(&[], &[], None, false),
+        chunk: &config.chunk_options(),
+        index: &IndexOptions {
+            extract: config.extract_options(),
+            ..Default::default()
+        },
+        watch: &WatchOptions {
+            debounce: std::time::Duration::from_millis(debounce_ms),
+        },
+    };
+
+    watch(
+        &mut store,
+        active.backend.as_ref(),
+        &root,
+        &pipeline,
+        |report| {
+            // Only speak up when something actually changed, so an idle watcher
+            // does not fill the terminal with noise.
+            if report.indexed > 0 || report.removed > 0 {
+                let _ = emit(&format!(
+                    "indexed {} file(s), {} chunk(s); removed {}\n",
+                    report.indexed, report.chunks_written, report.removed
+                ));
+            }
+        },
+    )
 }
 
 fn ask_cmd(

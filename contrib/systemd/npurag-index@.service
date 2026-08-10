@@ -1,0 +1,23 @@
+[Unit]
+Description=Refresh the npurag index for %I
+Documentation=https://github.com/antumbra-ai/npurag
+
+[Service]
+Type=oneshot
+# The instance name is the escaped path to index, e.g.
+#   systemctl --user enable --now npurag-index@$(systemd-escape /home/me/notes).timer
+ExecStart=%h/.cargo/bin/npurag index %I
+
+# Indexing is background work by design: it should never compete with whatever
+# the machine is actually doing.
+Nice=10
+IOSchedulingClass=idle
+CPUSchedulingPolicy=idle
+
+# The index is local and so is the backend; nothing here needs the network
+# beyond the loopback the inference server listens on.
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/npurag
+NoNewPrivileges=yes

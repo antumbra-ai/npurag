@@ -13,14 +13,21 @@ your device.
 npurag is the **memory layer** of **Antumbra** — an open, local-first AI platform where the
 NPU is the always-on background tier and your GPU or the cloud handle the heavy generation.
 
-> **Status: early / planning.** No code yet — the design is being built out in milestones
-> (M0–M6).
+> **Status: early.** Indexing, search and RAG work today against any OpenAI-compatible
+> backend, and against a built-in mock with no hardware at all. Not yet exercised on real
+> NPU silicon — reports welcome.
 
 ## What it does
 
 - `npurag index <dir>` — index a whole folder (any file types), incrementally.
 - `npurag search "<query>"` — semantic search over your files.
-- `npurag ask "<question>"` — answer questions grounded in your files (RAG).
+- `npurag ask "<question>"` — answer questions grounded in your files (RAG), with the
+  excerpts each answer was built from.
+- `npurag watch <dir>` — re-index as files change; `npurag prune` drops entries whose
+  files are gone.
+
+For a scheduled refresh instead of a running process, see the systemd user units in
+[`contrib/systemd`](./contrib/systemd).
 
 ## Requirements
 

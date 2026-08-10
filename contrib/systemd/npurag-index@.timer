@@ -1,0 +1,16 @@
+[Unit]
+Description=Keep the npurag index for %I fresh
+Documentation=https://github.com/antumbra-ai/npurag
+
+[Timer]
+# Hourly is a deliberate compromise: indexing is incremental, so an untouched
+# directory costs one stat per file, while a busy one is never more than an hour
+# stale. Use `npurag watch` instead if you want changes picked up immediately.
+OnBootSec=5min
+OnUnitActiveSec=1h
+# Do not pile up runs if the machine was asleep.
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

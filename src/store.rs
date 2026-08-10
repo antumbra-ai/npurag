@@ -344,6 +344,28 @@ impl Store {
         Ok(gone.len())
     }
 
+    /// Drop indexed files that no longer exist on disk.
+    ///
+    /// Unlike [`Store::delete_missing`] this consults the filesystem directly,
+    /// so it works without walking the tree — which is what makes `prune` cheap
+    /// enough to run on its own.
+    pub fn prune_missing(&mut self) -> Result<Vec<String>> {
+        let gone: Vec<String> = self
+            .all_paths()?
+            .into_iter()
+            .filter(|path| !Path::new(path).exists())
+            .collect();
+        if gone.is_empty() {
+            return Ok(gone);
+        }
+        let tx = self.conn.transaction()?;
+        for path in &gone {
+            tx.execute("DELETE FROM files WHERE path = ?1", params![path])?;
+        }
+        tx.commit()?;
+        Ok(gone)
+    }
+
     pub fn stats(&self) -> Result<Stats> {
         Ok(Stats {
             files: self

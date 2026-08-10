@@ -15,3 +15,4 @@ pub mod index;
 pub mod search;
 pub mod store;
 pub mod walk;
+pub mod watch;
