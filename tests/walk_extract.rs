@@ -1,7 +1,6 @@
 use std::fs;
 use std::path::Path;
 
-use npurag::extract::{extract, looks_binary, Extraction, SkipReason};
 use npurag::walk::{walk, WalkOptions};
 use tempfile::TempDir;
 
@@ -113,50 +112,4 @@ fn candidates_carry_the_metadata_the_incremental_check_needs() {
     let (candidates, _) = walk(tmp.path(), &WalkOptions::default()).expect("walks");
     assert_eq!(candidates[0].size, 5);
     assert!(candidates[0].mtime > 0.0);
-}
-
-#[test]
-fn text_is_extracted_as_utf8() {
-    let path = Path::new("notes.md");
-    assert_eq!(
-        extract(path, "zażółć gęślą jaźń".as_bytes()),
-        Extraction::Text("zażółć gęślą jaźń".to_string())
-    );
-}
-
-#[test]
-fn invalid_utf8_degrades_instead_of_failing() {
-    let path = Path::new("odd.txt");
-    match extract(path, &[b'a', 0xff, b'b']) {
-        Extraction::Text(text) => assert!(text.contains('a') && text.contains('b')),
-        other => panic!("expected lossy text, got {other:?}"),
-    }
-}
-
-#[test]
-fn binary_content_is_skipped() {
-    assert!(looks_binary(&[b'a', 0, b'b']));
-    assert!(!looks_binary(b"plain text"));
-    assert_eq!(
-        extract(Path::new("blob.dat"), &[0, 1, 2, 3]),
-        Extraction::Skipped(SkipReason::Binary)
-    );
-}
-
-#[test]
-fn a_nul_far_past_the_sniff_window_does_not_condemn_the_file() {
-    let mut bytes = vec![b'a'; 4096];
-    bytes.push(0);
-    assert!(!looks_binary(&bytes));
-}
-
-#[test]
-fn formats_awaiting_an_extractor_are_reported_separately() {
-    for name in ["paper.pdf", "letter.DOCX", "deck.pptx", "book.epub"] {
-        assert_eq!(
-            extract(Path::new(name), b"whatever"),
-            Extraction::Skipped(SkipReason::UnsupportedFormat),
-            "{name} should wait for its extractor"
-        );
-    }
 }

@@ -10,6 +10,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::chunk::ChunkOptions;
+use crate::extract::ExtractOptions;
 use crate::walk::WalkOptions;
 
 pub const AMD_FLM: &str = "amd-flm";
@@ -35,6 +36,10 @@ pub struct Config {
     pub chunk_tokens: usize,
     pub chunk_overlap: usize,
     pub exclude: Vec<String>,
+    /// Allow falling back to locally installed `pdftotext` / `pandoc` for
+    /// formats this build has no extractor for. Nothing leaves the machine;
+    /// set it to false to keep npurag from spawning any process at all.
+    pub external_extractors: bool,
     /// Explicit index location; when unset a per-root path under the user's data
     /// directory is used.
     pub db: Option<PathBuf>,
@@ -66,6 +71,7 @@ impl Default for Config {
             max_file_size_mb: 5,
             chunk_tokens: 400,
             chunk_overlap: 60,
+            external_extractors: true,
             exclude: vec![
                 ".git/**".to_string(),
                 "node_modules/**".to_string(),
@@ -216,6 +222,12 @@ impl Config {
             embed_model: preset.embed_model.clone(),
             chat_model: preset.chat_model.clone(),
         })
+    }
+
+    pub fn extract_options(&self) -> ExtractOptions {
+        ExtractOptions {
+            external_tools: self.external_extractors,
+        }
     }
 
     pub fn chunk_options(&self) -> ChunkOptions {

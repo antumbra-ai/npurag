@@ -40,6 +40,17 @@ cargo build
 cargo test        # runs against the mock backend — no NPU needed
 ```
 
+Text, code and Markdown are indexed out of the box. PDF, HTML and Office documents need
+their parsers compiled in, since they pull in heavy dependencies most indexes do not want:
+
+```bash
+cargo build --features extractors      # or: --features pdf,html,office
+```
+
+Without them, those files are skipped and counted rather than failing the run. npurag can
+also fall back to `pdftotext` or `pandoc` when they are installed locally; set
+`external_extractors = false` in the config to stop it spawning any process at all.
+
 ## Contributing
 
 Bug reports and backend compatibility reports are welcome — see

@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 
 use crate::backend::Backend;
 use crate::chunk::{chunk_text, ChunkOptions};
-use crate::extract::{extract, Extraction, SkipReason};
+use crate::extract::{extract, ExtractOptions, Extraction, SkipReason};
 use crate::store::Store;
 use crate::walk::{walk, WalkOptions};
 
@@ -17,6 +17,7 @@ pub struct IndexOptions {
     pub reindex: bool,
     /// How many chunks are sent per embeddings request.
     pub batch_size: usize,
+    pub extract: ExtractOptions,
 }
 
 impl Default for IndexOptions {
@@ -24,6 +25,7 @@ impl Default for IndexOptions {
         Self {
             reindex: false,
             batch_size: 32,
+            extract: ExtractOptions::default(),
         }
     }
 }
@@ -36,6 +38,7 @@ pub struct IndexReport {
     pub skipped_binary: usize,
     pub skipped_unsupported: usize,
     pub skipped_too_large: usize,
+    pub extraction_failed: usize,
     pub unreadable: usize,
     pub removed: usize,
     pub chunks_written: usize,
@@ -100,12 +103,13 @@ pub fn index_dir(
             }
         }
 
-        let text = match extract(&candidate.path, &bytes) {
+        let text = match extract(&candidate.path, &bytes, &options.extract) {
             Extraction::Text(text) => text,
             Extraction::Skipped(reason) => {
                 match reason {
                     SkipReason::Binary => report.skipped_binary += 1,
                     SkipReason::UnsupportedFormat => report.skipped_unsupported += 1,
+                    SkipReason::ExtractionFailed => report.extraction_failed += 1,
                 }
                 // A file that used to be indexable and no longer is must not
                 // linger in the index as a stale answer.

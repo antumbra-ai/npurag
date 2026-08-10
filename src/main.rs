@@ -137,6 +137,7 @@ fn main() -> Result<()> {
             path,
             IndexOptions {
                 reindex: *reindex,
+                extract: config.extract_options(),
                 ..Default::default()
             },
             include,
@@ -390,15 +391,18 @@ fn index(
     let skipped = report.skipped_binary
         + report.skipped_unsupported
         + report.skipped_too_large
+        + report.extraction_failed
         + report.unreadable;
     if skipped > 0 {
         writeln!(
             out,
-            "skipped      {skipped} ({} binary, {} needing an extractor, {} too large, {} unreadable)",
+            "skipped      {skipped} ({} binary, {} needing an extractor, {} too large, \
+             {} unreadable, {} failed to extract)",
             report.skipped_binary,
             report.skipped_unsupported,
             report.skipped_too_large,
-            report.unreadable
+            report.unreadable,
+            report.extraction_failed
         )?;
     }
     emit(&out)
