@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use npurag::backend::{Backend, MockBackend, OpenAiBackend};
 use npurag::config::{self, Config, Overrides};
 use npurag::index::{index_dir, IndexOptions};
+use npurag::search::{search, SearchOptions};
 use npurag::store::Store;
 
 #[derive(Parser)]
@@ -67,6 +68,9 @@ enum Command {
         query: String,
         #[arg(short = 'k', long, default_value_t = 8)]
         top_k: usize,
+        /// Only return hits whose path matches this glob.
+        #[arg(long, value_name = "GLOB")]
+        path: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -130,7 +134,21 @@ fn main() -> Result<()> {
             *max_size,
             *follow_symlinks,
         ),
-        Command::Search { .. } => bail!("`search` arrives in M2"),
+        Command::Search {
+            query,
+            top_k,
+            path,
+            json,
+        } => search_cmd(
+            &config,
+            cli.mock,
+            query,
+            SearchOptions {
+                top_k: *top_k,
+                path: path.clone(),
+            },
+            *json,
+        ),
         Command::Ask { .. } => bail!("`ask` arrives in M3"),
         Command::Prune => bail!("`prune` arrives in M5"),
     }
@@ -170,6 +188,86 @@ fn emit(text: &str) -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => Ok(()),
         other => Ok(other?),
     }
+}
+
+/// Open the index that covers the current directory.
+///
+/// Searching takes no path argument, so the working directory names the index
+/// the same way `status` does; `--db` overrides it.
+fn open_index(config: &Config) -> Result<(Store, PathBuf)> {
+    let root = std::env::current_dir()?;
+    let root = root.canonicalize().unwrap_or(root);
+    let db_path = config.db_path_for(&root)?;
+    if !db_path.is_file() {
+        // Naming the directory would be misleading when --db chose the path.
+        if config.db.is_some() {
+            bail!("no index at {}", db_path.display());
+        }
+        bail!(
+            "no index for {} yet — run `npurag index {}`, or point --db at an existing index",
+            root.display(),
+            root.display()
+        );
+    }
+    let store = Store::open(&db_path)?;
+    Ok((store, db_path))
+}
+
+/// Shorten a stored absolute path against the root the index was built from.
+fn display_path<'a>(path: &'a str, root: Option<&str>) -> &'a str {
+    root.and_then(|root| path.strip_prefix(root))
+        .map(|rest| rest.trim_start_matches('/'))
+        .unwrap_or(path)
+}
+
+/// A compact preview of a chunk: the first lines, whitespace collapsed.
+fn snippet(text: &str, width: usize) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= width {
+        return flat;
+    }
+    let cut: String = flat.chars().take(width).collect();
+    format!("{}…", cut.trim_end())
+}
+
+fn search_cmd(
+    config: &Config,
+    mock: bool,
+    query: &str,
+    options: SearchOptions,
+    json: bool,
+) -> Result<()> {
+    use std::fmt::Write as _;
+
+    let active = activate(config, mock)?;
+    let (store, _) = open_index(config)?;
+    store.ensure_model(&active.embed_model)?;
+
+    let hits = search(&store, active.backend.as_ref(), query, &options)?;
+
+    if json {
+        let payload = serde_json::json!({ "query": query, "hits": hits });
+        return emit(&format!("{}\n", serde_json::to_string_pretty(&payload)?));
+    }
+
+    if hits.is_empty() {
+        return emit("no matches\n");
+    }
+
+    let root = store.stats()?.root_path;
+    let mut out = String::new();
+    for (rank, hit) in hits.iter().enumerate() {
+        writeln!(
+            out,
+            "{:>2}. {:.3}  {}#{}",
+            rank + 1,
+            hit.score,
+            display_path(&hit.path, root.as_deref()),
+            hit.ord
+        )?;
+        writeln!(out, "    {}", snippet(&hit.text, 140))?;
+    }
+    emit(&out)
 }
 
 #[allow(clippy::too_many_arguments)]

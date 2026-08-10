@@ -74,6 +74,30 @@ fn embedding_is_case_and_punctuation_insensitive() {
 }
 
 #[test]
+fn repeating_a_word_does_not_inflate_its_weight() {
+    let backend = MockBackend::new();
+    let once = embed(&backend, "backup archive");
+    let many = embed(&backend, "backup archive archive archive archive");
+    assert!(
+        (cosine(&once, &many) - 1.0).abs() < 1e-5,
+        "term frequency must not shift the vector, or common words would dominate ranking"
+    );
+}
+
+#[test]
+fn a_document_padded_with_stopwords_loses_to_one_with_the_real_terms() {
+    let backend = MockBackend::new();
+    let query = embed(&backend, "where does the listener bind connections");
+    let relevant = embed(&backend, "listener bind incoming connections stream");
+    let padded = embed(&backend, "the the the the the deadline quarter invoices");
+
+    assert!(
+        cosine(&query, &relevant) > cosine(&query, &padded),
+        "the document with the query's terms must win"
+    );
+}
+
+#[test]
 fn an_empty_batch_yields_no_vectors() {
     let backend = MockBackend::new();
     assert!(backend.embed(&[]).expect("embeds").is_empty());

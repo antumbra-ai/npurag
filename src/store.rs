@@ -1,6 +1,6 @@
 //! The SQLite index: schema, and the reads and writes the pipeline needs.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -55,6 +55,14 @@ pub struct FileRecord {
     pub blake3: String,
     pub n_chunks: i64,
     pub indexed_at: f64,
+}
+
+/// The parts of a chunk that are only read once ranking has picked it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkText {
+    pub ord: i64,
+    pub text: String,
+    pub n_tokens: i64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -132,25 +140,76 @@ impl Store {
         Ok(())
     }
 
-    /// Record what produced this index, and refuse to mix incompatible vectors.
+    /// Fail if this index holds vectors from a different embedding model.
     ///
-    /// Embeddings from two different models are not comparable, so silently
-    /// appending to an index built by another model would corrupt every ranking.
-    pub fn bind_to_model(&self, backend: &str, embed_model: &str, root: &Path) -> Result<()> {
+    /// Embeddings from two models occupy unrelated spaces, so comparing across
+    /// them produces confident nonsense rather than an obvious error.
+    pub fn ensure_model(&self, embed_model: &str) -> Result<()> {
         match self.meta_get(meta_keys::EMBED_MODEL)? {
-            Some(found) if found != embed_model => {
-                return Err(anyhow!(
-                    "this index was built with embedding model `{found}`, but `{embed_model}` is \
-                     configured; vectors from different models are not comparable — rerun with \
-                     --reindex to rebuild it"
-                ));
-            }
-            Some(_) => {}
-            None => self.meta_set(meta_keys::EMBED_MODEL, embed_model)?,
+            Some(found) if found != embed_model => Err(anyhow!(
+                "this index was built with embedding model `{found}`, but `{embed_model}` is \
+                 configured; vectors from different models are not comparable — rerun with \
+                 --reindex to rebuild it"
+            )),
+            _ => Ok(()),
+        }
+    }
+
+    /// Record what produced this index, after checking it is compatible.
+    pub fn bind_to_model(&self, backend: &str, embed_model: &str, root: &Path) -> Result<()> {
+        self.ensure_model(embed_model)?;
+        if self.meta_get(meta_keys::EMBED_MODEL)?.is_none() {
+            self.meta_set(meta_keys::EMBED_MODEL, embed_model)?;
         }
         self.meta_set(meta_keys::BACKEND, backend)?;
         self.meta_set(meta_keys::ROOT_PATH, &root.to_string_lossy())?;
         Ok(())
+    }
+
+    /// Stream every stored vector with the path it came from.
+    ///
+    /// Chunk text is deliberately left behind: it dwarfs the vectors, and only
+    /// the handful of rows that survive ranking ever need to be read.
+    pub fn scan_vectors<F>(&self, mut visit: F) -> Result<()>
+    where
+        F: FnMut(i64, &str, Vec<f32>),
+    {
+        let mut stmt = self.conn.prepare(
+            "SELECT chunks.id, files.path, chunks.vec
+             FROM chunks JOIN files ON files.id = chunks.file_id",
+        )?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let id: i64 = row.get(0)?;
+            let path: String = row.get(1)?;
+            let blob: Vec<u8> = row.get(2)?;
+            visit(id, &path, blob_to_vec(&blob)?);
+        }
+        Ok(())
+    }
+
+    /// Fetch the full text of specific chunks, keyed by chunk id.
+    pub fn chunk_texts(&self, ids: &[i64]) -> Result<HashMap<i64, ChunkText>> {
+        let mut found = HashMap::with_capacity(ids.len());
+        let mut stmt = self.conn.prepare(
+            "SELECT chunks.id, chunks.ord, chunks.text, chunks.n_tokens
+             FROM chunks WHERE chunks.id = ?1",
+        )?;
+        for id in ids {
+            let row = stmt
+                .query_row(params![id], |row| {
+                    Ok(ChunkText {
+                        ord: row.get(1)?,
+                        text: row.get(2)?,
+                        n_tokens: row.get(3)?,
+                    })
+                })
+                .optional()?;
+            if let Some(row) = row {
+                found.insert(*id, row);
+            }
+        }
+        Ok(found)
     }
 
     /// Remember the embedding width the first time one is seen, and reject any

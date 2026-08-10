@@ -694,6 +694,7 @@ dependencies = [
  "blake3",
  "clap",
  "directories",
+ "globset",
  "ignore",
  "rusqlite",
  "serde",

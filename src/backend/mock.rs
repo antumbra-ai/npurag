@@ -1,9 +1,16 @@
 //! A deterministic, dependency-free backend used by tests and `--mock`.
 //!
-//! Embeddings are built by hashing whitespace-separated words into fixed buckets
-//! and normalising the result, so texts that share words land closer together
-//! under cosine similarity. That is enough structure to exercise indexing,
-//! ranking and RAG end to end without an NPU or a running server.
+//! Embeddings are built by hashing the *distinct* words of a text into fixed
+//! buckets and normalising the result, so texts that share vocabulary land
+//! closer together under cosine similarity. That is enough structure to exercise
+//! indexing, ranking and RAG end to end without an NPU or a running server.
+//!
+//! Distinct, not counted: weighting by term frequency let a document that
+//! repeats a common word like "the" outrank one that actually contains the
+//! query's terms. Real embedding models do not reward repetition either, so
+//! counting would have made the mock both less useful and less faithful.
+
+use std::collections::HashSet;
 
 use anyhow::Result;
 
@@ -35,11 +42,16 @@ impl MockBackend {
 
     fn embed_one(&self, text: &str) -> Vec<f32> {
         let mut v = vec![0.0f32; self.dim];
+        let mut seen = HashSet::new();
         for word in text
             .split(|c: char| !c.is_alphanumeric())
             .filter(|w| !w.is_empty())
         {
-            let hash = fnv1a64(&word.to_lowercase());
+            let word = word.to_lowercase();
+            if !seen.insert(word.clone()) {
+                continue;
+            }
+            let hash = fnv1a64(&word);
             v[(hash % self.dim as u64) as usize] += 1.0;
         }
 
