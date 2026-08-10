@@ -9,6 +9,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::chunk::ChunkOptions;
+use crate::walk::WalkOptions;
+
 pub const AMD_FLM: &str = "amd-flm";
 pub const INTEL_OVMS: &str = "intel-ovms";
 
@@ -213,6 +216,34 @@ impl Config {
             embed_model: preset.embed_model.clone(),
             chat_model: preset.chat_model.clone(),
         })
+    }
+
+    pub fn chunk_options(&self) -> ChunkOptions {
+        ChunkOptions {
+            target_tokens: self.chunk_tokens,
+            overlap_tokens: self.chunk_overlap,
+            ..ChunkOptions::default()
+        }
+    }
+
+    /// Build the traversal filters, letting command-line globs extend — never
+    /// replace — the excludes configured in the file.
+    pub fn walk_options(
+        &self,
+        include: &[String],
+        exclude: &[String],
+        max_size_mb: Option<u64>,
+        follow_symlinks: bool,
+    ) -> WalkOptions {
+        let mut excludes = self.exclude.clone();
+        excludes.extend(exclude.iter().cloned());
+        WalkOptions {
+            max_file_size: max_size_mb.unwrap_or(self.max_file_size_mb) * 1024 * 1024,
+            follow_symlinks,
+            include: include.to_vec(),
+            exclude: excludes,
+            ..WalkOptions::default()
+        }
     }
 
     /// Where the index for `root` lives. One index per root, keyed by a digest of

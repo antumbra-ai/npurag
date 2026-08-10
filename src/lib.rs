@@ -7,4 +7,9 @@
 //! hardware and no running server.
 
 pub mod backend;
+pub mod chunk;
 pub mod config;
+pub mod extract;
+pub mod index;
+pub mod store;
+pub mod walk;
