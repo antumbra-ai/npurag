@@ -6,6 +6,7 @@
 //! keeps the whole pipeline runnable against [`backend::MockBackend`] with no
 //! hardware and no running server.
 
+pub mod ask;
 pub mod backend;
 pub mod chunk;
 pub mod config;

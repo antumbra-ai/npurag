@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 
+use npurag::ask::{ask, AskOptions};
 use npurag::backend::{Backend, MockBackend, OpenAiBackend};
 use npurag::config::{self, Config, Overrides};
 use npurag::index::{index_dir, IndexOptions};
@@ -79,6 +80,15 @@ enum Command {
         question: String,
         #[arg(short = 'k', long, default_value_t = 8)]
         top_k: usize,
+        /// Only draw context from paths matching this glob.
+        #[arg(long, value_name = "GLOB")]
+        path: Option<String>,
+        /// Chat model to use instead of the configured one.
+        #[arg(long, value_name = "NAME")]
+        model: Option<String>,
+        /// Omit the list of excerpts the answer was built from.
+        #[arg(long)]
+        no_sources: bool,
         #[arg(long)]
         json: bool,
     },
@@ -149,7 +159,26 @@ fn main() -> Result<()> {
             },
             *json,
         ),
-        Command::Ask { .. } => bail!("`ask` arrives in M3"),
+        Command::Ask {
+            question,
+            top_k,
+            path,
+            model,
+            no_sources,
+            json,
+        } => ask_cmd(
+            &config,
+            cli.mock,
+            question,
+            AskOptions {
+                top_k: *top_k,
+                path: path.clone(),
+                model: model.clone(),
+                ..Default::default()
+            },
+            !*no_sources,
+            *json,
+        ),
         Command::Prune => bail!("`prune` arrives in M5"),
     }
 }
@@ -266,6 +295,45 @@ fn search_cmd(
             hit.ord
         )?;
         writeln!(out, "    {}", snippet(&hit.text, 140))?;
+    }
+    emit(&out)
+}
+
+fn ask_cmd(
+    config: &Config,
+    mock: bool,
+    question: &str,
+    options: AskOptions,
+    show_sources: bool,
+    json: bool,
+) -> Result<()> {
+    use std::fmt::Write as _;
+
+    let active = activate(config, mock)?;
+    let (store, _) = open_index(config)?;
+    store.ensure_model(&active.embed_model)?;
+
+    let answer = ask(&store, active.backend.as_ref(), question, &options)?;
+
+    if json {
+        return emit(&format!("{}\n", serde_json::to_string_pretty(&answer)?));
+    }
+
+    let mut out = String::new();
+    writeln!(out, "{}", answer.answer.trim())?;
+    if show_sources && !answer.sources.is_empty() {
+        let root = store.stats()?.root_path;
+        writeln!(out, "\nSources:")?;
+        for source in &answer.sources {
+            writeln!(
+                out,
+                "  [{}] {}#{}  ({:.3})",
+                source.marker,
+                display_path(&source.path, root.as_deref()),
+                source.ord,
+                source.score
+            )?;
+        }
     }
     emit(&out)
 }
