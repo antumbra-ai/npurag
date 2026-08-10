@@ -56,11 +56,18 @@ jobs:
         run: |
           binary=target/x86_64-unknown-linux-musl/release/npurag
           file "$binary"
+          ldd "$binary" 2>&1 || true
+
           # A dynamically linked binary would defeat the point of shipping one
-          # file, so fail loudly rather than publishing it.
-          if ldd "$binary" 2>&1 | grep -qv 'not a dynamic executable'; then
-            echo "::error::the binary is dynamically linked"
-            ldd "$binary" || true
+          # file, so fail loudly rather than publishing it. Test for resolved
+          # shared libraries — the "lib… => /path" lines ldd prints — because
+          # the wording of its static-case message varies between systems.
+          if ldd "$binary" 2>&1 | grep -q '=>'; then
+            echo "::error::the binary links against shared libraries"
+            exit 1
+          fi
+          if ! file "$binary" | grep -q 'static'; then
+            echo "::error::file(1) does not consider the binary static"
             exit 1
           fi
           "$binary" --version
