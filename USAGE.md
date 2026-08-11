@@ -220,6 +220,43 @@ a monitor can probe it without holding a credential.
 Requests are answered one at a time. This is a personal index, not a web service, and a
 second request waiting on the first is a better trade than a pool of database handles.
 
+### Use it from a tool that speaks the OpenAI API
+
+The same server also answers on `/v1/models` and `/v1/chat/completions`. There is no
+standard HTTP shape for "search my index" — the routes above are npurag's own — but almost
+every chat client already speaks this one, so pointing one at npurag is a change of base
+URL rather than an integration:
+
+| Setting | Value |
+|---|---|
+| Base URL | `http://127.0.0.1:8787/v1` |
+| API key | whatever you set as `NPURAG_TOKEN`; any string if you set none |
+| Model | `npurag` |
+
+```bash
+curl http://127.0.0.1:8787/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "npurag", "messages": [{"role": "user", "content": "what did I decide about project X?"}]}'
+```
+
+The client sends its API key as `Authorization: Bearer …`, which is exactly the header the
+token is checked against — configuring one is configuring the other.
+
+Three things worth knowing:
+
+- **The last user message is what gets searched for.** A conversation carries history the
+  retriever has no use for, and searching on the whole transcript retrieves what was being
+  discussed three turns ago.
+- **The sources are appended to the answer text**, since this shape has nowhere else to put
+  them. They are also in a `npurag.sources` field for callers that want them as data.
+- **Streaming is not token by token.** `"stream": true` returns proper `text/event-stream`
+  frames, so clients that require streaming work — but the answer is complete before the
+  first frame goes out, because the backend hands it over whole. Expect a pause and then
+  the whole reply.
+
+Naming a model other than `npurag` passes that name to the backend as the chat model, so
+picking one from a client's model list does something useful.
+
 ## Where things live
 
 - **Index** — `~/.local/share/npurag/<id>/index.db` on Linux,

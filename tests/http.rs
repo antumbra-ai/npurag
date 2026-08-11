@@ -62,11 +62,23 @@ fn with_token(
         defaults: SearchOptions::default(),
         token: token.map(str::to_string),
     };
-    let Reply { status, body } = service.handle(method, url, body, auth);
+    let Reply { status, body, .. } = service.handle(method, url, body, auth);
     (
         status,
         serde_json::from_str(&body).expect("every reply is JSON"),
     )
+}
+
+/// The raw reply, for routes whose body is not JSON.
+fn raw(store: &Store, method: &str, url: &str, body: &str) -> Reply {
+    let backend = MockBackend::new();
+    let service = Service {
+        store,
+        backend: &backend,
+        defaults: SearchOptions::default(),
+        token: None,
+    };
+    service.handle(method, url, body, None)
 }
 
 // --- routing ---------------------------------------------------------------
@@ -295,6 +307,192 @@ fn ask_answers_with_the_sources_it_used() {
     assert!(!body["answer"].as_str().unwrap().is_empty());
     assert!(!body["sources"].as_array().unwrap().is_empty());
     assert!(body["origin"]["chunks"].as_i64().unwrap() > 0);
+}
+
+// --- the OpenAI-compatible surface -----------------------------------------
+
+#[test]
+fn the_model_list_advertises_one_model() {
+    let (_tmp, root) = tree();
+    let store = indexed(&root);
+    let (status, body) = request(&store, "GET", "/v1/models", "");
+
+    assert_eq!(status, 200);
+    assert_eq!(body["object"], "list");
+    assert_eq!(body["data"][0]["id"], "npurag");
+    assert_eq!(body["data"][0]["object"], "model");
+}
+
+#[test]
+fn a_chat_completion_comes_back_in_the_shape_clients_expect() {
+    let (_tmp, root) = tree();
+    let store = indexed(&root);
+    let (status, body) = request(
+        &store,
+        "POST",
+        "/v1/chat/completions",
+        r#"{"model": "npurag", "messages": [{"role": "user", "content": "how is the backup configured?"}]}"#,
+    );
+
+    assert_eq!(status, 200);
+    assert_eq!(body["object"], "chat.completion");
+    assert_eq!(body["choices"][0]["message"]["role"], "assistant");
+    assert_eq!(body["choices"][0]["finish_reason"], "stop");
+    assert!(body["usage"]["total_tokens"].is_number());
+    assert!(body["id"].as_str().unwrap().starts_with("chatcmpl-"));
+
+    // The citations have to survive a shape that has no field for them.
+    let content = body["choices"][0]["message"]["content"].as_str().unwrap();
+    assert!(content.contains("Sources:"), "{content}");
+    assert!(!body["npurag"]["sources"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn the_last_user_message_is_what_gets_retrieved_on() {
+    let (_tmp, root) = tree();
+    let store = indexed(&root);
+    // The mock's chat echoes the prompt it was given, so the excerpts that
+    // reached the model are visible in the answer.
+    let (_, body) = request(
+        &store,
+        "POST",
+        "/v1/chat/completions",
+        r#"{"messages": [
+             {"role": "system", "content": "be brief"},
+             {"role": "user", "content": "tell me about kayaks"},
+             {"role": "assistant", "content": "nothing here about those"},
+             {"role": "user", "content": "borgmatic vault drive"}
+           ]}"#,
+    );
+
+    let content = body["choices"][0]["message"]["content"].as_str().unwrap();
+    assert!(content.contains("borgmatic"), "{content}");
+    let sources = body["npurag"]["sources"].as_array().unwrap();
+    assert!(sources[0]["path"].as_str().unwrap().ends_with("backup.md"));
+}
+
+#[test]
+fn naming_another_model_passes_it_to_the_backend() {
+    let (_tmp, root) = tree();
+    let store = indexed(&root);
+
+    // The mock reports which chat model it was called with, so the override is
+    // observable rather than merely plausible.
+    let (_, overridden) = request(
+        &store,
+        "POST",
+        "/v1/chat/completions",
+        r#"{"model": "gemma3:4b", "messages": [{"role": "user", "content": "backups?"}]}"#,
+    );
+    let content = overridden["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap();
+    assert!(content.contains("[mock:gemma3:4b]"), "{content}");
+    assert_eq!(overridden["model"], "gemma3:4b");
+
+    // Our own advertised name is not an override; it means "whatever you have".
+    let (_, default) = request(
+        &store,
+        "POST",
+        "/v1/chat/completions",
+        r#"{"model": "npurag", "messages": [{"role": "user", "content": "backups?"}]}"#,
+    );
+    assert!(default["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap()
+        .contains("[mock:mock-chat]"));
+}
+
+#[test]
+fn streaming_answers_in_frames_a_client_can_parse() {
+    let (_tmp, root) = tree();
+    let store = indexed(&root);
+    let reply = raw(
+        &store,
+        "POST",
+        "/v1/chat/completions",
+        r#"{"stream": true, "messages": [{"role": "user", "content": "backups?"}]}"#,
+    );
+
+    assert_eq!(reply.status, 200);
+    assert_eq!(reply.content_type, "text/event-stream");
+    assert!(reply.body.ends_with("data: [DONE]\n\n"), "{}", reply.body);
+
+    let frames: Vec<&str> = reply
+        .body
+        .split("\n\n")
+        .filter_map(|f| f.strip_prefix("data: "))
+        .filter(|f| *f != "[DONE]")
+        .collect();
+    assert_eq!(frames.len(), 3, "role, content, then the finish frame");
+
+    let first: Value = serde_json::from_str(frames[0]).unwrap();
+    assert_eq!(first["object"], "chat.completion.chunk");
+    assert_eq!(first["choices"][0]["delta"]["role"], "assistant");
+
+    let middle: Value = serde_json::from_str(frames[1]).unwrap();
+    assert!(middle["choices"][0]["delta"]["content"]
+        .as_str()
+        .unwrap()
+        .contains("Sources:"));
+
+    let last: Value = serde_json::from_str(frames[2]).unwrap();
+    assert_eq!(last["choices"][0]["finish_reason"], "stop");
+}
+
+#[test]
+fn a_conversation_with_nothing_to_answer_is_refused_in_their_error_shape() {
+    let (_tmp, root) = tree();
+    let store = indexed(&root);
+
+    let (status, body) = request(&store, "POST", "/v1/chat/completions", r#"{"model": "x"}"#);
+    assert_eq!(status, 400);
+    // OpenAI clients read error.message, not a bare string.
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("messages"));
+
+    let (status, body) = request(
+        &store,
+        "POST",
+        "/v1/chat/completions",
+        r#"{"messages": [{"role": "system", "content": "be brief"}]}"#,
+    );
+    assert_eq!(status, 400);
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("user message"));
+}
+
+#[test]
+fn the_token_doubles_as_an_api_key() {
+    let (_tmp, root) = tree();
+    let store = indexed(&root);
+    // An OpenAI client sends its key exactly the way this endpoint wants it,
+    // so configuring one is the same act as configuring the other.
+    let body = r#"{"messages": [{"role": "user", "content": "backups?"}]}"#;
+
+    let (status, _) = with_token(
+        &store,
+        Some("sk-local"),
+        "POST",
+        "/v1/chat/completions",
+        body,
+        None,
+    );
+    assert_eq!(status, 401);
+
+    let (status, _) = with_token(
+        &store,
+        Some("sk-local"),
+        "POST",
+        "/v1/chat/completions",
+        body,
+        Some("Bearer sk-local"),
+    );
+    assert_eq!(status, 200);
 }
 
 // --- over a real socket ----------------------------------------------------

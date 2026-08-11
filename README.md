@@ -33,7 +33,9 @@ what to do when something looks wrong. Po polsku: [`USAGE_PL.md`](./USAGE_PL.md)
 - `npurag mcp <dir>` — serve the index to an assistant over the Model Context Protocol,
   on stdin and stdout. No port, no daemon: the client launches it as a child process.
 - `npurag serve <dir>` — the same searches over HTTP, for callers that are not an
-  assistant. Loopback by default, and it refuses to bind wider without a token.
+  assistant. Loopback by default, and it refuses to bind wider without a token. Also
+  answers `/v1/chat/completions`, so any OpenAI-compatible client can use your files as
+  its knowledge by changing one base URL.
 
 For a scheduled refresh instead of a running process, see the systemd user units in
 [`contrib/systemd`](./contrib/systemd).
@@ -66,9 +68,9 @@ extractors, since a downloaded binary cannot have Cargo features turned on after
 
 ## Build
 
-Built in milestones (M0–M9): skeleton & backend → index → search → ask (RAG) →
+Built in milestones (M0–M10): skeleton & backend → index → search → ask (RAG) →
 extractors → freshness → scale → hybrid retrieval and reranking → MCP server →
-HTTP endpoint.
+HTTP endpoint → OpenAI-compatible surface.
 
 ```bash
 cargo build

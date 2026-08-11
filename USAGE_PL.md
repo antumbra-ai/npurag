@@ -216,6 +216,43 @@ Wołający wysyła wtedy `Authorization: Bearer <token>`. Używaj zmiennej środ
 Żądania obsługiwane są pojedynczo. To indeks osobisty, nie serwis webowy, a drugie żądanie
 czekające na pierwsze jest lepszym kompromisem niż pula uchwytów do bazy.
 
+### Użyj z narzędzia mówiącego po API OpenAI
+
+Ten sam serwer odpowiada również na `/v1/models` i `/v1/chat/completions`. Nie istnieje
+standardowy kształt HTTP dla „przeszukaj mój indeks" — trasy powyżej to wymysł npuraga — ale
+tym dialektem mówi już niemal każdy klient czatu, więc wskazanie mu npuraga to zmiana adresu,
+a nie integracja:
+
+| Ustawienie | Wartość |
+|---|---|
+| Base URL | `http://127.0.0.1:8787/v1` |
+| Klucz API | to, co ustawisz w `NPURAG_TOKEN`; dowolny ciąg, gdy nie ustawisz nic |
+| Model | `npurag` |
+
+```bash
+curl http://127.0.0.1:8787/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "npurag", "messages": [{"role": "user", "content": "co ustaliłem w sprawie projektu X?"}]}'
+```
+
+Klient wysyła klucz API jako `Authorization: Bearer …`, czyli dokładnie ten nagłówek, w
+którym sprawdzany jest token — konfigurując jedno, konfigurujesz drugie.
+
+Trzy rzeczy warte wiedzenia:
+
+- **Szukane jest ostatnie pytanie użytkownika.** Rozmowa niesie historię, do której
+  wyszukiwarka nic nie ma, a szukanie po całym zapisie wyciąga to, o czym była mowa trzy
+  tury wcześniej.
+- **Źródła doklejane są do treści odpowiedzi**, bo ten kształt nie ma na nie miejsca. Są też
+  w polu `npurag.sources`, dla wołających, którzy chcą ich jako danych.
+- **Strumieniowanie nie jest token po tokenie.** `"stream": true` zwraca porządne ramki
+  `text/event-stream`, więc klienci wymagający streamingu działają — ale odpowiedź jest
+  gotowa, zanim poleci pierwsza ramka, bo backend oddaje ją w całości. Spodziewaj się pauzy,
+  a potem całości naraz.
+
+Podanie modelu innego niż `npurag` przekazuje tę nazwę backendowi jako model czatowy, więc
+wybranie czegoś z listy modeli w kliencie robi coś sensownego.
+
 ## Gdzie co leży
 
 - **Indeks** — `~/.local/share/npurag/<id>/index.db` na Linuksie,

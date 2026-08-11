@@ -27,6 +27,9 @@ use crate::store::Store;
 
 pub const DEFAULT_BIND: &str = "127.0.0.1:8787";
 
+/// The model name npurag answers to on the OpenAI-compatible routes.
+pub const MODEL_ID: &str = "npurag";
+
 #[derive(Debug, Clone)]
 pub struct HttpOptions {
     pub bind: String,
@@ -43,11 +46,12 @@ impl Default for HttpOptions {
     }
 }
 
-/// A JSON reply, ready to go out.
+/// A reply, ready to go out.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reply {
     pub status: u16,
     pub body: String,
+    pub content_type: String,
 }
 
 impl Reply {
@@ -55,6 +59,16 @@ impl Reply {
         Self {
             status: 200,
             body: format!("{value}"),
+            content_type: "application/json".to_string(),
+        }
+    }
+
+    /// Server-sent events, for the OpenAI-compatible streaming shape.
+    fn sse(body: String) -> Self {
+        Self {
+            status: 200,
+            body,
+            content_type: "text/event-stream".to_string(),
         }
     }
 
@@ -62,6 +76,22 @@ impl Reply {
         Self {
             status,
             body: json!({ "error": message.to_string() }).to_string(),
+            content_type: "application/json".to_string(),
+        }
+    }
+
+    /// The error shape OpenAI clients know how to read.
+    fn openai_error(status: u16, message: impl std::fmt::Display) -> Self {
+        Self {
+            status,
+            body: json!({
+                "error": {
+                    "message": message.to_string(),
+                    "type": "invalid_request_error",
+                }
+            })
+            .to_string(),
+            content_type: "application/json".to_string(),
         }
     }
 }
@@ -105,12 +135,97 @@ impl Service<'_> {
             ("GET", "/status") => self.status(),
             ("GET" | "POST", "/search") => self.search(&arguments),
             ("GET" | "POST", "/ask") => self.ask(&arguments),
+            ("GET", "/v1/models") => Reply::ok(models()),
+            ("POST", "/v1/chat/completions") => self.chat_completions(&arguments),
             ("GET" | "POST", _) => Reply::error(
                 404,
-                format!("no route {path}; try /search, /ask, /status or /health"),
+                format!(
+                    "no route {path}; try /search, /ask, /status, /health or \
+                     /v1/chat/completions"
+                ),
             ),
             _ => Reply::error(405, format!("{method} is not allowed on {path}")),
         }
+    }
+
+    /// Answer as though npurag were a chat model.
+    ///
+    /// The point is not to pretend: it is that every client already speaks this
+    /// shape. Pointing one at npurag becomes a change of base URL, and what
+    /// comes back is an answer from the user's own files instead of from a
+    /// model's memory.
+    ///
+    /// The last user message is what gets retrieved on. A conversation carries
+    /// history the retriever has no use for, and searching on the whole
+    /// transcript reliably retrieves what was being discussed three turns ago.
+    fn chat_completions(&self, arguments: &Value) -> Reply {
+        let Some(messages) = arguments.get("messages").and_then(Value::as_array) else {
+            return Reply::openai_error(400, "`messages` is required");
+        };
+        let question = messages
+            .iter()
+            .rev()
+            .find(|m| m.get("role").and_then(Value::as_str) == Some("user"))
+            .and_then(|m| m.get("content"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|content| !content.is_empty());
+        let Some(question) = question else {
+            return Reply::openai_error(400, "no user message to answer");
+        };
+
+        let requested = string_of(arguments, "model");
+        let options = AskOptions {
+            search: self.defaults.clone(),
+            // A model name that is not the one advertised is taken as a request
+            // for that chat model, which makes picking one from a client's model
+            // list do something useful rather than nothing.
+            model: requested.clone().filter(|name| name != MODEL_ID),
+            ..Default::default()
+        };
+
+        let answer = match ask(self.store, self.backend, question, &options) {
+            Ok(answer) => answer,
+            Err(e) => return Reply::openai_error(500, format!("{e:#}")),
+        };
+
+        // This shape has nowhere to put citations, and an answer from someone's
+        // files that cannot say which file is worth less. So they go in the
+        // text, the way `ask` prints them.
+        let mut content = answer.answer.trim().to_string();
+        if !answer.sources.is_empty() {
+            content.push_str("\n\nSources:\n");
+            for source in &answer.sources {
+                content.push_str(&format!(
+                    "  [{}] {}#{}\n",
+                    source.marker, source.path, source.ord
+                ));
+            }
+        }
+
+        let model = requested.unwrap_or_else(|| MODEL_ID.to_string());
+        let id = format!("chatcmpl-{}", now_seconds());
+        if arguments.get("stream").and_then(Value::as_bool) == Some(true) {
+            return Reply::sse(stream_frames(&id, &model, &content));
+        }
+
+        Reply::ok(json!({
+            "id": id,
+            "object": "chat.completion",
+            "created": now_seconds(),
+            "model": model,
+            "choices": [{
+                "index": 0,
+                "message": { "role": "assistant", "content": content },
+                "finish_reason": "stop",
+            }],
+            // Clients expect the field to exist. npurag does not count tokens,
+            // and reporting a guess as a measurement would be worse than zero.
+            "usage": { "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0 },
+            // Not part of the OpenAI shape; clients ignore what they do not
+            // know, and a caller that wants the citations as data has them.
+            "npurag": { "sources": answer.sources, "origin": answer.origin },
+        }))
     }
 
     fn authorized(&self, auth: Option<&str>) -> bool {
@@ -241,8 +356,9 @@ pub fn serve(service: &Service, options: &HttpOptions, ready: impl FnOnce(&str))
             auth.as_deref(),
         );
 
-        let header = tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
-            .expect("a constant header always parses");
+        let header =
+            tiny_http::Header::from_bytes(&b"Content-Type"[..], reply.content_type.as_bytes())
+                .expect("the content type is one of a handful of constants");
         let response = tiny_http::Response::from_string(reply.body)
             .with_status_code(reply.status)
             .with_header(header);
@@ -363,6 +479,54 @@ fn as_usize(value: &Value) -> Option<usize> {
         Value::String(s) => s.trim().parse().ok(),
         _ => None,
     }
+}
+
+fn models() -> Value {
+    json!({
+        "object": "list",
+        "data": [{
+            "id": MODEL_ID,
+            "object": "model",
+            "created": now_seconds(),
+            "owned_by": "npurag",
+        }],
+    })
+}
+
+/// The streaming form of one answer.
+///
+/// Honest about what it is: the answer is complete before the first byte goes
+/// out, because the backend hands it over whole. These frames exist so that
+/// clients which insist on `text/event-stream` work at all — not to make the
+/// text appear a word at a time. Real token-by-token streaming would mean
+/// streaming from the backend too, which is the `reqwest`/`tokio` question
+/// left open in the plan.
+fn stream_frames(id: &str, model: &str, content: &str) -> String {
+    let created = now_seconds();
+    let frame = |delta: Value, finish: Value| {
+        format!(
+            "data: {}\n\n",
+            json!({
+                "id": id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [{ "index": 0, "delta": delta, "finish_reason": finish }],
+            })
+        )
+    };
+    let mut body = frame(json!({ "role": "assistant" }), Value::Null);
+    body.push_str(&frame(json!({ "content": content }), Value::Null));
+    body.push_str(&frame(json!({}), Value::from("stop")));
+    body.push_str("data: [DONE]\n\n");
+    body
+}
+
+fn now_seconds() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// Compare without leaking, through timing, how much of the token was right.
