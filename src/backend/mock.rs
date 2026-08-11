@@ -18,6 +18,7 @@ use super::{Backend, Message, Role};
 
 pub struct MockBackend {
     dim: usize,
+    reranker: bool,
 }
 
 impl MockBackend {
@@ -33,7 +34,20 @@ impl MockBackend {
     /// Panics if `dim` is zero — a zero-dimensional embedding is never valid.
     pub fn with_dim(dim: usize) -> Self {
         assert!(dim > 0, "embedding dimension must be non-zero");
-        Self { dim }
+        Self {
+            dim,
+            reranker: false,
+        }
+    }
+
+    /// Pretend this backend has a reranking model.
+    ///
+    /// Off by default, so that the mock behaves like the common case — a
+    /// backend with an embedding model and a chat model and nothing else — and
+    /// reranking is only exercised where a test asks for it.
+    pub fn with_reranker(mut self) -> Self {
+        self.reranker = true;
+        self
     }
 
     pub fn dim(&self) -> usize {
@@ -93,13 +107,48 @@ impl Backend for MockBackend {
         ))
     }
 
+    fn rerank(&self, query: &str, documents: &[String]) -> Result<Option<Vec<f32>>> {
+        if !self.reranker {
+            return Ok(None);
+        }
+        let wanted = words(query);
+        Ok(Some(
+            documents
+                .iter()
+                .map(|document| {
+                    if wanted.is_empty() {
+                        return 0.0;
+                    }
+                    // The share of the query's words the excerpt actually
+                    // contains, on the nought-to-ten scale a real reranker is
+                    // asked for. Crude, but it moves the ranking in the same
+                    // direction a real one would, and it does so identically on
+                    // every machine.
+                    let found = words(document).intersection(&wanted).count();
+                    10.0 * found as f32 / wanted.len() as f32
+                })
+                .collect(),
+        ))
+    }
+
     fn health(&self) -> bool {
         true
     }
 
     fn describe(&self) -> String {
-        format!("mock (dim {})", self.dim)
+        match self.reranker {
+            true => format!("mock (dim {}, with reranker)", self.dim),
+            false => format!("mock (dim {})", self.dim),
+        }
     }
+}
+
+/// The distinct lowercase words of a text.
+fn words(text: &str) -> HashSet<String> {
+    text.split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect()
 }
 
 fn fnv1a64(s: &str) -> u64 {

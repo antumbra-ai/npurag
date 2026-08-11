@@ -4,7 +4,7 @@ use npurag::ask::{ask, build_prompt, origin_of, select_context, AskOptions};
 use npurag::backend::{Backend, Message, MockBackend, Role};
 use npurag::chunk::ChunkOptions;
 use npurag::index::{index_dir, IndexOptions};
-use npurag::search::Hit;
+use npurag::search::{Hit, SearchOptions};
 use npurag::store::Store;
 use npurag::walk::WalkOptions;
 
@@ -33,6 +33,7 @@ fn hit(path: &str, text: &str, score: f32) -> Hit {
         score,
         n_tokens: text.len().div_ceil(4) as i64,
         text: text.to_string(),
+        ..Default::default()
     }
 }
 
@@ -79,7 +80,10 @@ fn the_path_filter_restricts_where_the_answer_may_draw_from() {
         &MockBackend::new(),
         "what does this code do?",
         &AskOptions {
-            path: Some("*.md".to_string()),
+            search: SearchOptions {
+                path: Some("*.md".to_string()),
+                ..Default::default()
+            },
             ..Default::default()
         },
     )

@@ -70,6 +70,17 @@ pub trait Backend {
     /// Run a chat completion, optionally overriding the configured chat model.
     fn chat(&self, messages: &[Message], model: Option<&str>) -> anyhow::Result<String>;
 
+    /// Score how well each document answers `query`, higher being better.
+    ///
+    /// `Ok(None)` means this backend has no reranking model — a normal state,
+    /// not a failure: reranking is an optional refinement, and a backend
+    /// without one still searches and answers. Defaulted so that adding a
+    /// backend never means writing a reranker first.
+    fn rerank(&self, query: &str, documents: &[String]) -> anyhow::Result<Option<Vec<f32>>> {
+        let _ = (query, documents);
+        Ok(None)
+    }
+
     /// Cheap reachability probe used by `npurag status`. Never returns an error:
     /// an unreachable backend is a normal, reportable state, not a failure.
     fn health(&self) -> bool;

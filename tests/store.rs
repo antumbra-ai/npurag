@@ -79,7 +79,7 @@ fn rewriting_a_file_replaces_its_chunks_instead_of_appending() {
 
 #[test]
 fn deleting_a_file_cascades_to_its_chunks() {
-    let store = store_with_one_file();
+    let mut store = store_with_one_file();
     assert!(store.delete_file("/tmp/a.md").unwrap());
 
     let stats = store.stats().unwrap();

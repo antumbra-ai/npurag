@@ -10,7 +10,8 @@ use npurag::ask::{ask, origin_of, AskOptions};
 use npurag::backend::{Backend, MockBackend, OpenAiBackend};
 use npurag::config::{self, Config, Overrides};
 use npurag::index::{index_dir_with_progress, IndexOptions, Progress};
-use npurag::search::{search, SearchOptions};
+use npurag::rerank::RerankMode;
+use npurag::search::{search, Scores, SearchMode, SearchOptions};
 use npurag::store::Store;
 use npurag::watch::{watch, Pipeline, WatchOptions};
 
@@ -66,7 +67,7 @@ enum Command {
         #[arg(long)]
         follow_symlinks: bool,
     },
-    /// Search the index by meaning.
+    /// Search the index by meaning and by wording.
     Search {
         query: String,
         #[arg(short = 'k', long, default_value_t = 8)]
@@ -74,6 +75,12 @@ enum Command {
         /// Only return hits whose path matches this glob.
         #[arg(long, value_name = "GLOB")]
         path: Option<String>,
+        /// Which retrievers to run; defaults to the configured mode.
+        #[arg(long, value_enum, value_name = "MODE")]
+        mode: Option<SearchMode>,
+        /// How to rerank the shortlist; defaults to the configured setting.
+        #[arg(long, value_enum, value_name = "MODE")]
+        rerank: Option<RerankMode>,
         #[arg(long)]
         json: bool,
     },
@@ -85,6 +92,12 @@ enum Command {
         /// Only draw context from paths matching this glob.
         #[arg(long, value_name = "GLOB")]
         path: Option<String>,
+        /// Which retrievers to run; defaults to the configured mode.
+        #[arg(long, value_enum, value_name = "MODE")]
+        mode: Option<SearchMode>,
+        /// How to rerank the shortlist; defaults to the configured setting.
+        #[arg(long, value_enum, value_name = "MODE")]
+        rerank: Option<RerankMode>,
         /// Chat model to use instead of the configured one.
         #[arg(long, value_name = "NAME")]
         model: Option<String>,
@@ -125,6 +138,7 @@ fn main() -> Result<()> {
         base_url: cli.base_url.clone(),
         embed_model: None,
         chat_model: None,
+        rerank_model: None,
         db: cli.db.clone(),
     };
     let config = Config::load(cli.config.as_deref(), &overrides)?;
@@ -158,21 +172,22 @@ fn main() -> Result<()> {
             query,
             top_k,
             path,
+            mode,
+            rerank,
             json,
         } => search_cmd(
             &config,
             cli.mock,
             query,
-            SearchOptions {
-                top_k: *top_k,
-                path: path.clone(),
-            },
+            retrieval(&config, *top_k, path.clone(), *mode, *rerank),
             *json,
         ),
         Command::Ask {
             question,
             top_k,
             path,
+            mode,
+            rerank,
             model,
             no_sources,
             json,
@@ -181,8 +196,7 @@ fn main() -> Result<()> {
             cli.mock,
             question,
             AskOptions {
-                top_k: *top_k,
-                path: path.clone(),
+                search: retrieval(&config, *top_k, path.clone(), *mode, *rerank),
                 model: model.clone(),
                 ..Default::default()
             },
@@ -192,6 +206,27 @@ fn main() -> Result<()> {
         Command::Prune => prune_cmd(&config),
         Command::Watch { path, debounce } => watch_cmd(&config, cli.mock, path, *debounce),
     }
+}
+
+/// Retrieval settings for one command: the configured ones, with whatever the
+/// command line said about them applied on top.
+fn retrieval(
+    config: &Config,
+    top_k: usize,
+    path: Option<String>,
+    mode: Option<SearchMode>,
+    rerank: Option<RerankMode>,
+) -> SearchOptions {
+    let mut options = config.search_options();
+    options.top_k = top_k;
+    options.path = path;
+    if let Some(mode) = mode {
+        options.mode = mode;
+    }
+    if let Some(rerank) = rerank {
+        options.rerank.mode = rerank;
+    }
+    options
 }
 
 fn activate(config: &Config, mock: bool) -> Result<Active> {
@@ -204,12 +239,15 @@ fn activate(config: &Config, mock: bool) -> Result<Active> {
     }
     let resolved = config.resolve_backend()?;
     Ok(Active {
-        backend: Box::new(OpenAiBackend::new(
-            resolved.name.clone(),
-            resolved.base_url,
-            resolved.embed_model.clone(),
-            resolved.chat_model,
-        )),
+        backend: Box::new(
+            OpenAiBackend::new(
+                resolved.name.clone(),
+                resolved.base_url,
+                resolved.embed_model.clone(),
+                resolved.chat_model,
+            )
+            .with_rerank_model(resolved.rerank_model),
+        ),
         name: resolved.name,
         embed_model: resolved.embed_model,
     })
@@ -301,9 +339,16 @@ fn search_cmd(
     let root = store.stats()?.root_path;
     let mut out = String::new();
     for (rank, hit) in hits.iter().enumerate() {
+        // With one retriever the tag would say only what the command already
+        // said; with two it says which of them found this.
+        let tag = if options.mode == SearchMode::Hybrid || hit.scores.rerank.is_some() {
+            format!(" [{}]", provenance(&hit.scores))
+        } else {
+            String::new()
+        };
         writeln!(
             out,
-            "{:>2}. {:.3}  {}#{}",
+            "{:>2}. {:.3}{tag}  {}#{}",
             rank + 1,
             hit.score,
             display_path(&hit.path, root.as_deref()),
@@ -312,6 +357,22 @@ fn search_cmd(
         writeln!(out, "    {}", snippet(&hit.text, 140))?;
     }
     emit(&out)
+}
+
+/// Which stages put a hit where it is: `v` for the vector search, `l` for BM25,
+/// `r` when the reranker had the last word.
+fn provenance(scores: &Scores) -> String {
+    let mut parts = Vec::new();
+    if scores.vector.is_some() {
+        parts.push("v");
+    }
+    if scores.lexical.is_some() {
+        parts.push("l");
+    }
+    if scores.rerank.is_some() {
+        parts.push("r");
+    }
+    parts.join("+")
 }
 
 /// A progress bar on stderr, so piping stdout stays clean. indicatif hides it
@@ -558,6 +619,14 @@ fn status(
         writeln!(out, "base url     {}", resolved.base_url)?;
         writeln!(out, "embed model  {}", resolved.embed_model)?;
         writeln!(out, "chat model   {}", resolved.chat_model)?;
+        writeln!(
+            out,
+            "rerank model {}",
+            resolved
+                .rerank_model
+                .as_deref()
+                .unwrap_or("none (set rerank_model, or use --rerank llm)")
+        )?;
 
         let active = activate(config, false)?;
         writeln!(
@@ -596,6 +665,12 @@ fn status(
             "index stats  not created yet — run `npurag index <dir>`"
         )?;
     }
+
+    writeln!(
+        out,
+        "retrieval    {} search, rerank {}",
+        config.search.mode, config.search.rerank
+    )?;
 
     let known: Vec<&str> = config.backends.keys().map(String::as_str).collect();
     writeln!(out, "presets      {}", known.join(", "))?;

@@ -77,6 +77,7 @@ fn a_fifty_thousand_chunk_index_still_answers() {
         &SearchOptions {
             top_k: 5,
             path: None,
+            ..Default::default()
         },
     )
     .expect("searches");
@@ -107,6 +108,7 @@ fn a_path_filter_still_narrows_a_large_index() {
         &SearchOptions {
             top_k: 3,
             path: Some("**/doc-0001.md".to_string()),
+            ..Default::default()
         },
     )
     .expect("searches");

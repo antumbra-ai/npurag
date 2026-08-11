@@ -156,6 +156,7 @@ fn a_preset_without_a_base_url_is_rejected() {
             base_url: "  ".to_string(),
             embed_model: "e".to_string(),
             chat_model: "c".to_string(),
+            rerank_model: None,
         },
     );
 

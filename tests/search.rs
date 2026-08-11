@@ -90,6 +90,7 @@ fn top_k_bounds_the_result_count() {
         &SearchOptions {
             top_k: 2,
             path: None,
+            ..Default::default()
         },
     )
     .expect("searches");
@@ -106,6 +107,7 @@ fn asking_for_no_results_returns_none_and_embeds_nothing() {
         &SearchOptions {
             top_k: 0,
             path: None,
+            ..Default::default()
         },
     )
     .expect("searches");
@@ -122,6 +124,7 @@ fn the_path_filter_narrows_results_to_matching_files() {
         &SearchOptions {
             top_k: 8,
             path: Some("**/notes/**".to_string()),
+            ..Default::default()
         },
     )
     .expect("searches");
@@ -143,6 +146,7 @@ fn a_bare_extension_glob_matches_on_the_file_name() {
         &SearchOptions {
             top_k: 8,
             path: Some("*.rs".to_string()),
+            ..Default::default()
         },
     )
     .expect("searches");
@@ -161,6 +165,7 @@ fn a_filter_matching_nothing_yields_no_hits() {
         &SearchOptions {
             top_k: 8,
             path: Some("*.tex".to_string()),
+            ..Default::default()
         },
     )
     .expect("searches");
@@ -177,6 +182,7 @@ fn an_invalid_glob_is_reported_rather_than_ignored() {
         &SearchOptions {
             top_k: 8,
             path: Some("[".to_string()),
+            ..Default::default()
         },
     )
     .unwrap_err()

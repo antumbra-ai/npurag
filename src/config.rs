@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::chunk::ChunkOptions;
 use crate::extract::ExtractOptions;
+use crate::rerank::{RerankMode, RerankOptions};
+use crate::search::{Fusion, SearchMode, SearchOptions};
 use crate::walk::WalkOptions;
 
 pub const AMD_FLM: &str = "amd-flm";
@@ -25,9 +27,45 @@ pub struct BackendPreset {
     pub base_url: String,
     pub embed_model: String,
     pub chat_model: String,
+    /// The reranking model, when this server has one. Left out of the built-in
+    /// presets: a reranker is a third model to load, and npurag should not
+    /// assume one is running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rerank_model: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// How a query is matched against the index.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SearchConfig {
+    pub mode: SearchMode,
+    pub rerank: RerankMode,
+    /// How many retrieved chunks the reranker is shown.
+    pub rerank_top: usize,
+    /// Candidates per retriever before fusion; 0 derives it from `-k`.
+    pub candidates: usize,
+    pub rrf_k: f32,
+    pub vector_weight: f32,
+    pub lexical_weight: f32,
+}
+
+impl Default for SearchConfig {
+    fn default() -> Self {
+        let fusion = Fusion::default();
+        let rerank = RerankOptions::default();
+        Self {
+            mode: SearchMode::default(),
+            rerank: rerank.mode,
+            rerank_top: rerank.top,
+            candidates: fusion.candidates,
+            rrf_k: fusion.rrf_k,
+            vector_weight: fusion.vector_weight,
+            lexical_weight: fusion.lexical_weight,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
     /// Name of the active entry in `backends`.
@@ -43,7 +81,8 @@ pub struct Config {
     /// Explicit index location; when unset a per-root path under the user's data
     /// directory is used.
     pub db: Option<PathBuf>,
-    /// Tables must be serialised after scalars, so this field stays last.
+    /// Tables must be serialised after scalars, so these two fields stay last.
+    pub search: SearchConfig,
     pub backends: BTreeMap<String, BackendPreset>,
 }
 
@@ -56,6 +95,7 @@ impl Default for Config {
                 base_url: "http://localhost:52625/v1".to_string(),
                 embed_model: "embeddinggemma-300m".to_string(),
                 chat_model: "gemma3:4b".to_string(),
+                rerank_model: None,
             },
         );
         backends.insert(
@@ -64,6 +104,7 @@ impl Default for Config {
                 base_url: "http://localhost:8000/v3".to_string(),
                 embed_model: "embeddinggemma-300m".to_string(),
                 chat_model: "gemma3:4b-int4-ov".to_string(),
+                rerank_model: None,
             },
         );
         Self {
@@ -72,6 +113,7 @@ impl Default for Config {
             chunk_tokens: 400,
             chunk_overlap: 60,
             external_extractors: true,
+            search: SearchConfig::default(),
             exclude: vec![
                 ".git/**".to_string(),
                 "node_modules/**".to_string(),
@@ -91,6 +133,7 @@ pub struct Overrides {
     pub base_url: Option<String>,
     pub embed_model: Option<String>,
     pub chat_model: Option<String>,
+    pub rerank_model: Option<String>,
     pub db: Option<PathBuf>,
 }
 
@@ -101,6 +144,7 @@ pub struct ResolvedBackend {
     pub base_url: String,
     pub embed_model: String,
     pub chat_model: String,
+    pub rerank_model: Option<String>,
 }
 
 impl Config {
@@ -153,6 +197,7 @@ impl Config {
             base_url: get("NPURAG_BASE_URL"),
             embed_model: get("NPURAG_EMBED_MODEL"),
             chat_model: get("NPURAG_CHAT_MODEL"),
+            rerank_model: get("NPURAG_RERANK_MODEL"),
             db: get("NPURAG_DB").map(PathBuf::from),
         });
     }
@@ -170,7 +215,8 @@ impl Config {
 
         let touches_preset = overrides.base_url.is_some()
             || overrides.embed_model.is_some()
-            || overrides.chat_model.is_some();
+            || overrides.chat_model.is_some()
+            || overrides.rerank_model.is_some();
         if !touches_preset {
             return;
         }
@@ -184,6 +230,7 @@ impl Config {
                 base_url: String::new(),
                 embed_model: String::new(),
                 chat_model: String::new(),
+                rerank_model: None,
             });
         let preset = self
             .backends
@@ -198,6 +245,9 @@ impl Config {
         }
         if let Some(chat_model) = &overrides.chat_model {
             preset.chat_model = chat_model.clone();
+        }
+        if let Some(rerank_model) = &overrides.rerank_model {
+            preset.rerank_model = Some(rerank_model.clone());
         }
     }
 
@@ -221,7 +271,28 @@ impl Config {
             base_url: preset.base_url.trim_end_matches('/').to_string(),
             embed_model: preset.embed_model.clone(),
             chat_model: preset.chat_model.clone(),
+            rerank_model: preset.rerank_model.clone(),
         })
+    }
+
+    /// Retrieval settings from the config file, ready for the command line to
+    /// override the handful of them it exposes.
+    pub fn search_options(&self) -> SearchOptions {
+        SearchOptions {
+            mode: self.search.mode,
+            fusion: Fusion {
+                rrf_k: self.search.rrf_k,
+                vector_weight: self.search.vector_weight,
+                lexical_weight: self.search.lexical_weight,
+                candidates: self.search.candidates,
+            },
+            rerank: RerankOptions {
+                mode: self.search.rerank,
+                top: self.search.rerank_top,
+                ..RerankOptions::default()
+            },
+            ..SearchOptions::default()
+        }
     }
 
     pub fn extract_options(&self) -> ExtractOptions {

@@ -67,11 +67,40 @@ Dostajesz najlepiej pasujące fragmenty ze score'em, plik źródłowy i podgląd
 muszą się zgadzać: notatka o „nocnej retencji archiwów" może odpowiedzieć na pytanie o
 backup.
 
+Naprawdę biegną dwa wyszukiwania, a ich rankingi są łączone. Jedno dopasowuje po
+**znaczeniu**, na embeddingach; drugie po **brzmieniu słów**, algorytmem BM25 na indeksie
+pełnotekstowym. Znacznik obok score'a mówi, które znalazło dany fragment: `[v]` — po
+znaczeniu, `[l]` — po słowach, `[v+l]` — oba, a `+r` dochodzi, gdy ostatnie słowo miał
+reranker. Te dwa nawzajem zakrywają swoje ślepe plamy: samo znaczenie gubi numer faktury
+albo kod błędu, a same słowa gubią parafrazę.
+
 | Opcja | Działanie |
 |---|---|
 | `-k N` | Ile wyników zwrócić (domyślnie 8) |
 | `--path WZORZEC` | Szukaj tylko w pasujących ścieżkach, np. `--path '*.md'` |
+| `--mode TRYB` | `hybrid` (domyślnie), `vector` — samo znaczenie, `lexical` — same słowa |
+| `--rerank TRYB` | `auto` (domyślnie), `off`, `endpoint`, `llm` — patrz niżej |
 | `--json` | Wyjście maszynowe, do skryptów |
+
+`--mode lexical` warto znać z dwóch powodów: to tryb do sięgnięcia, gdy pamiętasz dokładny
+ciąg znaków, i jedyny, który nie potrzebuje żadnego serwera — działa więc również wtedy,
+gdy backend leży.
+
+### Reranking
+
+Wyszukiwanie musi być szybkie, bo przelicza cały indeks. Reranking bierze dwadzieścia
+fragmentów, które przeszły, i ogląda każdy z osobna pod kątem twojego pytania — zwykle
+poprawia to kilka pierwszych wyników.
+
+| `--rerank` | Co się dzieje |
+|---|---|
+| `auto` | Rerankuje, jeśli backend ma model rerankujący; jeśli nie ma — pomija. Domyślne. |
+| `off` | Ranking wyłącznie ze score'ów wyszukiwania. |
+| `endpoint` | Żąda modelu rerankującego z backendu i kończy błędem, gdy go nie ma. |
+| `llm` | Ocenia fragmenty modelem czatowym. Działa na każdym backendzie, kosztuje generację. |
+
+`auto` nic nie robi, dopóki nie wpiszesz backendowi `rerank_model` w konfiguracji — npurag
+nie zakłada, że masz załadowany trzeci model. `npurag status` pokazuje, czy jakiś jest.
 
 ### Zadaj pytanie
 
@@ -88,6 +117,8 @@ ma w nich odpowiedzi — traktuj więc pewnie brzmiącą odpowiedź bez źróde�
 |---|---|
 | `-k N` | Z ilu fragmentów korzystać (domyślnie 8) |
 | `--path WZORZEC` | Czerp tylko z pasujących ścieżek |
+| `--mode TRYB` | Jak szukać fragmentów; tryby jak w `search` |
+| `--rerank TRYB` | Jak rerankować krótką listę; tryby jak w `search` |
 | `--model NAZWA` | Użyj innego modelu czatowego do tego pytania |
 | `--no-sources` | Wypisz samą odpowiedź |
 | `--json` | Odpowiedź, źródła i pochodzenie jako JSON |
@@ -125,6 +156,15 @@ chunk_overlap    = 60        # ile sąsiadujące fragmenty mają wspólnego
 exclude = [".git/**", "node_modules/**", "target/**", "**/*.min.js"]
 external_extractors = true   # wolno wołać pdftotext / pandoc, jeśli są zainstalowane
 
+[search]
+mode           = "hybrid"    # hybrid | vector | lexical
+rerank         = "auto"      # auto | off | endpoint | llm
+rerank_top     = 20          # ile fragmentów dostaje reranker
+candidates     = 0           # ilu kandydatów na wyszukiwanie przed łączeniem; 0 = z -k
+rrf_k          = 60.0        # jak płasko oba rankingi ważą się nawzajem
+vector_weight  = 1.0         # podnieś, żeby bardziej ufać znaczeniu
+lexical_weight = 1.0         # podnieś, żeby bardziej ufać dokładnym słowom
+
 [backends.amd-flm]
 base_url    = "http://localhost:52625/v1"
 embed_model = "embeddinggemma-300m"
@@ -134,12 +174,13 @@ chat_model  = "gemma3:4b"
 base_url    = "http://localhost:8000/v3"
 embed_model = "embeddinggemma-300m"
 chat_model  = "gemma3:4b-int4-ov"
+# rerank_model = "bge-reranker-base"   # jeśli twój serwer taki ma
 ```
 
 Backend przełączysz na jedno wywołanie przez `--backend intel-ovms`, a sam adres przez
 `--base-url`. Działają też zmienne środowiskowe: `NPURAG_BACKEND`, `NPURAG_BASE_URL`,
-`NPURAG_EMBED_MODEL`, `NPURAG_CHAT_MODEL`, `NPURAG_DB`. Flagi z linii poleceń wygrywają ze
-zmiennymi środowiskowymi, a te z plikiem konfiguracyjnym.
+`NPURAG_EMBED_MODEL`, `NPURAG_CHAT_MODEL`, `NPURAG_RERANK_MODEL`, `NPURAG_DB`. Flagi z
+linii poleceń wygrywają ze zmiennymi środowiskowymi, a te z plikiem konfiguracyjnym.
 
 ## Jakie typy plików
 
@@ -166,8 +207,15 @@ aktualnie jesteś. Albo wejdź (`cd`) do zaindeksowanego katalogu, albo podaj `-
 ścieżką do jego indeksu.
 
 **Wyniki wyglądają słabo.** Spróbuj dłuższego, bardziej konkretnego pytania — pełne zdanie
-daje nieporównanie więcej do dopasowania niż pojedyncze słowo. Rozmiar fragmentów zmienia
-`chunk_tokens`, a `--path` zawęża wyszukiwanie, gdy z grubsza wiesz, gdzie leży odpowiedź.
+daje nieporównanie więcej do dopasowania niż pojedyncze słowo. Jeśli pamiętasz dokładne
+brzmienie, `--mode lexical` poszuka go dosłownie; jeśli pamiętasz tylko sens, `--mode
+vector` całkowicie zignoruje słowa. `--rerank llm` przyjrzy się krótkiej liście dokładniej,
+kosztem jednej generacji. Rozmiar fragmentów zmienia `chunk_tokens`, a `--path` zawęża
+wyszukiwanie, gdy z grubsza wiesz, gdzie leży odpowiedź.
+
+**Indeks zbudowany starszą wersją.** Zostanie uaktualniony w miejscu przy pierwszym
+otwarciu: połowa pełnotekstowa powstaje z tekstu, który indeks już trzyma, więc nic nie
+idzie do backendu i nic nie wymaga ponownego liczenia embeddingów.
 
 ---
 

@@ -9,7 +9,12 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::chunk::Chunk;
 
-pub const SCHEMA_VERSION: &str = "1";
+/// Bumped to 2 when the lexical index arrived. An older database is migrated in
+/// place rather than rejected: the text BM25 needs is already stored, so the
+/// lexical index can be built from it without asking the backend to embed
+/// anything again.
+pub const SCHEMA_VERSION: &str = "2";
+const SCHEMA_VERSION_WITHOUT_LEXICAL: &str = "1";
 
 pub mod meta_keys {
     pub const SCHEMA_VERSION: &str = "schema_version";
@@ -44,6 +49,17 @@ CREATE TABLE IF NOT EXISTS chunks (
   vec      BLOB    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chunks_file ON chunks(file_id);
+-- The lexical half of retrieval. `content='chunks'` keeps the text in one place:
+-- the virtual table holds only the inverted index and reads the original text
+-- back through the rowid, which is the chunk id. That also means every write to
+-- `chunks` must be mirrored here by hand — see `fts_forget_file` and
+-- `replace_file` — because SQLite does not do it for us.
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+  text,
+  content='chunks',
+  content_rowid='id',
+  tokenize='unicode61 remove_diacritics 2'
+);
 "#;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -108,6 +124,15 @@ impl Store {
             None => {
                 store.meta_set(meta_keys::SCHEMA_VERSION, SCHEMA_VERSION)?;
                 store.meta_set(meta_keys::CREATED_AT, &now_seconds().to_string())?;
+            }
+            // An index built before the lexical half existed: the statement
+            // above has just created the empty virtual table, so filling it
+            // from the stored chunk text is the whole migration.
+            Some(found) if found == SCHEMA_VERSION_WITHOUT_LEXICAL => {
+                store
+                    .rebuild_lexical()
+                    .context("could not build the lexical index for this older database")?;
+                store.meta_set(meta_keys::SCHEMA_VERSION, SCHEMA_VERSION)?;
             }
             Some(found) if found != SCHEMA_VERSION => {
                 return Err(anyhow!(
@@ -190,6 +215,50 @@ impl Store {
             decode_into(blob, &mut vector)?;
             visit(id, &path, &vector);
         }
+        Ok(())
+    }
+
+    /// Rank chunks against an FTS5 `MATCH` expression, best first.
+    ///
+    /// `visit` returns `false` to stop the scan: callers want a few dozen
+    /// candidates, while a query holding a common word can match a large share
+    /// of the corpus.
+    pub fn scan_lexical<F>(&self, match_expression: &str, mut visit: F) -> Result<()>
+    where
+        F: FnMut(i64, &str, f32) -> bool,
+    {
+        let mut stmt = self.conn.prepare(
+            "SELECT chunks.id, files.path, bm25(chunks_fts)
+             FROM chunks_fts
+             JOIN chunks ON chunks.id = chunks_fts.rowid
+             JOIN files  ON files.id = chunks.file_id
+             WHERE chunks_fts MATCH ?1
+             ORDER BY bm25(chunks_fts)",
+        )?;
+        let mut rows = stmt.query(params![match_expression]).with_context(|| {
+            format!("the index rejected the lexical query `{match_expression}`")
+        })?;
+        while let Some(row) = rows.next()? {
+            let id: i64 = row.get(0)?;
+            let path: String = row.get(1)?;
+            // bm25() measures distance from irrelevant, so a better match is a
+            // more negative number. Flip it, and every score in npurag means
+            // the same thing: larger is closer.
+            let score: f64 = row.get(2)?;
+            if !visit(id, &path, -score as f32) {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    /// Rebuild the lexical index from the stored chunk text.
+    ///
+    /// Needed when migrating an index written before the lexical half existed,
+    /// and cheap enough to be the repair for one that ever falls out of step.
+    pub fn rebuild_lexical(&self) -> Result<()> {
+        self.conn
+            .execute("INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild')", [])?;
         Ok(())
     }
 
@@ -281,6 +350,7 @@ impl Store {
         }
 
         let tx = self.conn.transaction()?;
+        fts_forget_file(&tx, path)?;
         tx.execute("DELETE FROM files WHERE path = ?1", params![path])?;
         tx.execute(
             "INSERT INTO files (path, mtime, size, blake3, n_chunks, indexed_at)
@@ -300,6 +370,7 @@ impl Store {
                 "INSERT INTO chunks (file_id, ord, text, n_tokens, vec)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
             )?;
+            let mut lexical = tx.prepare("INSERT INTO chunks_fts (rowid, text) VALUES (?1, ?2)")?;
             for (chunk, vector) in chunks.iter().zip(vectors) {
                 stmt.execute(params![
                     file_id,
@@ -308,6 +379,7 @@ impl Store {
                     chunk.n_tokens as i64,
                     vec_to_blob(vector)
                 ])?;
+                lexical.execute(params![tx.last_insert_rowid(), chunk.text])?;
             }
         }
         tx.commit()?;
@@ -324,11 +396,12 @@ impl Store {
         Ok(())
     }
 
-    pub fn delete_file(&self, path: &str) -> Result<bool> {
-        Ok(self
-            .conn
-            .execute("DELETE FROM files WHERE path = ?1", params![path])?
-            > 0)
+    pub fn delete_file(&mut self, path: &str) -> Result<bool> {
+        let tx = self.conn.transaction()?;
+        fts_forget_file(&tx, path)?;
+        let removed = tx.execute("DELETE FROM files WHERE path = ?1", params![path])?;
+        tx.commit()?;
+        Ok(removed > 0)
     }
 
     /// Drop every indexed file that the walk no longer sees.
@@ -343,6 +416,7 @@ impl Store {
         }
         let tx = self.conn.transaction()?;
         for path in &gone {
+            fts_forget_file(&tx, path)?;
             tx.execute("DELETE FROM files WHERE path = ?1", params![path])?;
         }
         tx.commit()?;
@@ -365,6 +439,7 @@ impl Store {
         }
         let tx = self.conn.transaction()?;
         for path in &gone {
+            fts_forget_file(&tx, path)?;
             tx.execute("DELETE FROM files WHERE path = ?1", params![path])?;
         }
         tx.commit()?;
@@ -390,9 +465,34 @@ impl Store {
 
     /// Wipe the indexed content, keeping the database and its identity metadata.
     pub fn clear(&self) -> Result<()> {
-        self.conn.execute("DELETE FROM files", [])?;
+        // `unchecked_transaction` because this takes `&self`: a shared borrow is
+        // all a wipe needs, and a hand-written `BEGIN`/`COMMIT` batch would
+        // leave the transaction open if the statement between them failed.
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM files", [])?;
+        tx.execute(
+            "INSERT INTO chunks_fts(chunks_fts) VALUES('delete-all')",
+            [],
+        )?;
+        tx.commit()?;
         Ok(())
     }
+}
+
+/// Drop a file's chunks from the lexical index, before the rows themselves go.
+///
+/// An external-content FTS5 table cannot look the text up once the chunk is
+/// deleted, so the removal has to be told what it is removing — and it has to
+/// happen first. Cascading deletes do not reach here on their own.
+fn fts_forget_file(conn: &Connection, path: &str) -> Result<()> {
+    conn.execute(
+        "INSERT INTO chunks_fts(chunks_fts, rowid, text)
+         SELECT 'delete', chunks.id, chunks.text
+         FROM chunks JOIN files ON files.id = chunks.file_id
+         WHERE files.path = ?1",
+        params![path],
+    )?;
+    Ok(())
 }
 
 /// Vectors are stored as little-endian `f32`, which is what the plan specifies

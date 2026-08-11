@@ -69,11 +69,40 @@ You get the best-matching passages with a score, the file each came from and a p
 Words do not have to match: a note about "nightly archive retention" can answer a question
 about backups.
 
+Two searches actually run, and their rankings are merged. One matches by **meaning**, using
+the embeddings; the other matches by **wording**, using BM25 over a full-text index. The
+tag beside each score says which found it — `[v]` by meaning, `[l]` by its words, `[v+l]`
+by both, with `+r` when a reranker had the final say. The two cover each other's blind
+spots: meaning alone struggles with an invoice number or an error code, and wording alone
+misses a paraphrase.
+
 | Option | What it does |
 |---|---|
 | `-k N` | How many results to return (default 8) |
 | `--path GLOB` | Only search files whose path matches, e.g. `--path '*.md'` |
+| `--mode MODE` | `hybrid` (default), `vector` for meaning only, `lexical` for words only |
+| `--rerank MODE` | `auto` (default), `off`, `endpoint`, `llm` — see below |
 | `--json` | Machine-readable output, for scripting |
+
+`--mode lexical` is worth knowing about for two reasons: it is the mode to reach for when
+you remember the exact string, and it is the only one that needs no server at all, so it
+still works when the backend is down.
+
+### Reranking
+
+Retrieval has to be quick, because it scores the whole index. Reranking takes the twenty
+passages that survived and looks at each one against your question properly, which usually
+improves the top few results.
+
+| `--rerank` | What happens |
+|---|---|
+| `auto` | Rerank if the backend has a reranking model, otherwise skip it. The default. |
+| `off` | Rank by retrieval score alone. |
+| `endpoint` | Insist on the backend's reranking model, and fail if it has none. |
+| `llm` | Score the passages with the chat model. Works on any backend, costs a generation. |
+
+`auto` does nothing until you give a backend a `rerank_model` in the config — npurag will
+not assume a third model is loaded. `npurag status` shows whether one is configured.
 
 ### Ask a question
 
@@ -91,6 +120,8 @@ no sources as a warning.
 |---|---|
 | `-k N` | How many passages to draw on (default 8) |
 | `--path GLOB` | Only draw on files whose path matches |
+| `--mode MODE` | How the passages are found; same modes as `search` |
+| `--rerank MODE` | How the shortlist is reranked; same modes as `search` |
 | `--model NAME` | Use a different chat model for this question |
 | `--no-sources` | Print only the answer |
 | `--json` | Answer, sources and origin as JSON |
@@ -128,6 +159,15 @@ chunk_overlap    = 60        # how much neighbouring passages share
 exclude = [".git/**", "node_modules/**", "target/**", "**/*.min.js"]
 external_extractors = true   # may call pdftotext / pandoc if installed
 
+[search]
+mode           = "hybrid"    # hybrid | vector | lexical
+rerank         = "auto"      # auto | off | endpoint | llm
+rerank_top     = 20          # how many passages the reranker is shown
+candidates     = 0           # per-search candidates before merging; 0 = from -k
+rrf_k          = 60.0        # how flatly the two rankings are weighed against each other
+vector_weight  = 1.0         # raise to trust meaning more
+lexical_weight = 1.0         # raise to trust exact wording more
+
 [backends.amd-flm]
 base_url    = "http://localhost:52625/v1"
 embed_model = "embeddinggemma-300m"
@@ -137,12 +177,13 @@ chat_model  = "gemma3:4b"
 base_url    = "http://localhost:8000/v3"
 embed_model = "embeddinggemma-300m"
 chat_model  = "gemma3:4b-int4-ov"
+# rerank_model = "bge-reranker-base"   # if your server has one
 ```
 
 Switch backends per command with `--backend intel-ovms`, or override just the address with
 `--base-url`. Any of `NPURAG_BACKEND`, `NPURAG_BASE_URL`, `NPURAG_EMBED_MODEL`,
-`NPURAG_CHAT_MODEL` and `NPURAG_DB` work as environment variables too. Command-line flags
-win over environment variables, which win over the config file.
+`NPURAG_CHAT_MODEL`, `NPURAG_RERANK_MODEL` and `NPURAG_DB` work as environment variables
+too. Command-line flags win over environment variables, which win over the config file.
 
 ## Which file types
 
@@ -168,8 +209,15 @@ model that built it; measurements from two different models are not comparable. 
 in. Either `cd` into the folder you indexed, or pass `--db` with the path to its index.
 
 **Results seem poor.** Try a longer, more specific question — a full sentence gives far
-more to match on than a single word. Passage size is adjustable with `chunk_tokens`, and
-`--path` narrows the search when you know roughly where the answer lives.
+more to match on than a single word. If you remember the exact wording, `--mode lexical`
+searches for it literally; if you remember only the gist, `--mode vector` ignores wording
+entirely. `--rerank llm` will take a closer look at the shortlist, at the cost of a
+generation. Passage size is adjustable with `chunk_tokens`, and `--path` narrows the search
+when you know roughly where the answer lives.
+
+**An index built by an older version.** It is upgraded in place the first time you open it:
+the full-text half is built from text the index already holds, so nothing is sent to the
+backend and nothing needs re-embedding.
 
 ---
 

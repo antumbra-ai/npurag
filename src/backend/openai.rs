@@ -17,6 +17,7 @@ pub struct OpenAiBackend {
     base_url: String,
     embed_model: String,
     chat_model: String,
+    rerank_model: Option<String>,
     agent: ureq::Agent,
 }
 
@@ -36,8 +37,16 @@ impl OpenAiBackend {
             base_url: base_url.into().trim_end_matches('/').to_string(),
             embed_model: embed_model.into(),
             chat_model: chat_model.into(),
+            rerank_model: None,
             agent: config.into(),
         }
+    }
+
+    /// Point this backend at a reranking model. Without one, `rerank` reports
+    /// itself unsupported and retrieval order stands.
+    pub fn with_rerank_model(mut self, model: Option<String>) -> Self {
+        self.rerank_model = model.filter(|name| !name.trim().is_empty());
+        self
     }
 
     pub fn base_url(&self) -> &str {
@@ -61,6 +70,21 @@ struct EmbeddingItem {
     embedding: Vec<f32>,
     #[serde(default)]
     index: usize,
+}
+
+/// The reranking response, in the shape Cohere introduced and both Jina and
+/// OpenVINO Model Server copied: results carry the index of the document they
+/// scored, and the server is free to return them in any order or to leave some
+/// out.
+#[derive(Deserialize)]
+struct RerankResponse {
+    results: Vec<RerankResult>,
+}
+
+#[derive(Deserialize)]
+struct RerankResult {
+    index: usize,
+    relevance_score: f32,
 }
 
 #[derive(Deserialize)]
@@ -148,6 +172,51 @@ impl Backend for OpenAiBackend {
             .next()
             .map(|choice| choice.message.content)
             .ok_or_else(|| anyhow!("{url} returned no choices"))
+    }
+
+    fn rerank(&self, query: &str, documents: &[String]) -> Result<Option<Vec<f32>>> {
+        let Some(model) = &self.rerank_model else {
+            return Ok(None);
+        };
+        if documents.is_empty() {
+            return Ok(Some(Vec::new()));
+        }
+        let url = self.endpoint("rerank");
+        let body = json!({
+            "model": model,
+            "query": query,
+            "documents": documents,
+            // Ask for every document back: the ranking is done here, from the
+            // scores, and a server that returns only its own favourites would
+            // silently drop the rest of the shortlist.
+            "top_n": documents.len(),
+        });
+
+        let mut response = self
+            .agent
+            .post(&url)
+            .send_json(&body)
+            .with_context(|| format!("POST {url} failed"))?;
+
+        let parsed: RerankResponse = response
+            .body_mut()
+            .read_json()
+            .with_context(|| format!("could not parse the rerank response from {url}"))?;
+
+        // A document the server said nothing about keeps a neutral zero rather
+        // than pushing the whole call into an error.
+        let mut scores = vec![0.0f32; documents.len()];
+        for result in parsed.results {
+            let slot = scores.get_mut(result.index).ok_or_else(|| {
+                anyhow!(
+                    "{url} scored document {} of {}",
+                    result.index,
+                    documents.len()
+                )
+            })?;
+            *slot = result.relevance_score;
+        }
+        Ok(Some(scores))
     }
 
     fn health(&self) -> bool {

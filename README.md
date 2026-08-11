@@ -23,7 +23,9 @@ what to do when something looks wrong. Po polsku: [`USAGE_PL.md`](./USAGE_PL.md)
 ## What it does
 
 - `npurag index <dir>` — index a whole folder (any file types), incrementally.
-- `npurag search "<query>"` — semantic search over your files.
+- `npurag search "<query>"` — hybrid search over your files: meaning (embeddings) and
+  wording (BM25) ranked together, so an invoice number is as findable as a paraphrase.
+  Optionally reranked, by a reranking model or by the chat model itself.
 - `npurag ask "<question>"` — answer questions grounded in your files (RAG), with the
   excerpts each answer was built from.
 - `npurag watch <dir>` — re-index as files change; `npurag prune` drops entries whose
@@ -60,8 +62,8 @@ extractors, since a downloaded binary cannot have Cargo features turned on after
 
 ## Build
 
-Built in milestones (M0–M6): skeleton & backend → index → search → ask (RAG) →
-extractors → freshness → scale.
+Built in milestones (M0–M7): skeleton & backend → index → search → ask (RAG) →
+extractors → freshness → scale → hybrid retrieval and reranking.
 
 ```bash
 cargo build

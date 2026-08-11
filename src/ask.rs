@@ -8,10 +8,12 @@ use crate::chunk::estimate_tokens;
 use crate::search::{search, Hit, SearchOptions};
 use crate::store::Store;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AskOptions {
-    pub top_k: usize,
-    pub path: Option<String>,
+    /// How the excerpts are retrieved — mode, filters, reranking. Shared with
+    /// `search` rather than mirrored, so the two commands can never drift into
+    /// answering the same question differently.
+    pub search: SearchOptions,
     /// Override the configured chat model for this one question.
     pub model: Option<String>,
     /// Ceiling on how much retrieved text is pasted into the prompt. Retrieval
@@ -23,8 +25,7 @@ pub struct AskOptions {
 impl Default for AskOptions {
     fn default() -> Self {
         Self {
-            top_k: 8,
-            path: None,
+            search: SearchOptions::default(),
             model: None,
             max_context_tokens: 3000,
         }
@@ -120,15 +121,7 @@ pub fn ask(
     question: &str,
     options: &AskOptions,
 ) -> Result<Answer> {
-    let hits = search(
-        store,
-        backend,
-        question,
-        &SearchOptions {
-            top_k: options.top_k,
-            path: options.path.clone(),
-        },
-    )?;
+    let hits = search(store, backend, question, &options.search)?;
 
     if hits.is_empty() {
         return Ok(Answer {
