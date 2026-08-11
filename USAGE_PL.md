@@ -2,7 +2,9 @@
 
 npurag zamienia wskazany katalog na Twoim dysku w indeks, po którym można szukać
 **znaczeniem**, a nie dokładnym słowem, oraz zadawać pytania, na które odpowiedź powstaje
-z Twoich własnych plików — wraz z fragmentami, z których została zbudowana.
+z Twoich własnych plików — wraz z fragmentami, z których została zbudowana. Ten sam indeks
+możesz też oddać czemuś innemu — asystentowi, skryptowi, klientowi czatu — i nic przy tym
+nie opuszcza maszyny.
 
 Nic nie jest nigdzie wysyłane. Indeks to pojedynczy plik SQLite na Twoim dysku, a model
 czytający Twój tekst działa na Twojej maszynie.
@@ -32,7 +34,7 @@ Chcesz zobaczyć npurag bez żadnego serwera? Dodaj `--mock`. Użyje wbudowanego
 który nie wymaga sprzętu. Wyniki są zgrubne, ale wszystkie komendy działają — to dobry
 sposób, żeby poznać całość.
 
-## Cztery komendy
+## Komendy
 
 ### Zaindeksuj katalog
 
@@ -135,6 +137,9 @@ npurag prune               # usuwa wpisy plików, których już nie ma
 `watch` czeka, aż edycja się uspokoi, więc jeden zapis pliku powoduje jedną aktualizację,
 a nie kilka. Jeśli wolisz nie trzymać uruchomionego programu, zaplanuj `npurag index` —
 na Linuksie projekt dostarcza gotowe unity systemd-user właśnie do tego.
+
+Wszystko powyżej uruchamiasz sam. Trzy kolejne oddają indeks czemuś innemu — i każda z nich
+trzyma go na tej maszynie.
 
 ### Udostępnij indeks asystentowi
 
@@ -296,7 +301,8 @@ chat_model  = "gemma3:4b-int4-ov"
 
 Backend przełączysz na jedno wywołanie przez `--backend intel-ovms`, a sam adres przez
 `--base-url`. Działają też zmienne środowiskowe: `NPURAG_BACKEND`, `NPURAG_BASE_URL`,
-`NPURAG_EMBED_MODEL`, `NPURAG_CHAT_MODEL`, `NPURAG_RERANK_MODEL`, `NPURAG_DB`. Flagi z
+`NPURAG_EMBED_MODEL`, `NPURAG_CHAT_MODEL`, `NPURAG_RERANK_MODEL`, `NPURAG_TOKEN`,
+`NPURAG_DB`. Flagi z
 linii poleceń wygrywają ze zmiennymi środowiskowymi, a te z plikiem konfiguracyjnym.
 
 ## Jakie typy plików
@@ -329,6 +335,14 @@ brzmienie, `--mode lexical` poszuka go dosłownie; jeśli pamiętasz tylko sens,
 vector` całkowicie zignoruje słowa. `--rerank llm` przyjrzy się krótkiej liście dokładniej,
 kosztem jednej generacji. Rozmiar fragmentów zmienia `chunk_tokens`, a `--path` zawęża
 wyszukiwanie, gdy z grubsza wiesz, gdzie leży odpowiedź.
+
+**`mcp` albo `serve` mówi „no index for … yet".** Inaczej niż `search`, biorą zaindeksowany
+katalog jako argument, bo katalog bieżący wybiera to, co je uruchamia, a nie Ty. Podaj folder,
+który zaindeksowałeś: `npurag mcp ~/Dokumenty`.
+
+**Asystent nie widzi narzędzi.** Zajrzyj do logu klienta, nie do terminala: npurag pisze
+komunikaty protokołu na stdout, a całą resztę na stderr, i klient zbiera je osobno. Dwie
+zwykłe przyczyny to zła ścieżka do binarki i katalog, którego nigdy nie zaindeksowano.
 
 **Indeks zbudowany starszą wersją.** Zostanie uaktualniony w miejscu przy pierwszym
 otwarciu: połowa pełnotekstowa powstaje z tekstu, który indeks już trzyma, więc nic nie

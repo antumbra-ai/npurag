@@ -29,7 +29,7 @@ what to do when something looks wrong. Po polsku: [`USAGE_PL.md`](./USAGE_PL.md)
 - `npurag ask "<question>"` — answer questions grounded in your files (RAG), with the
   excerpts each answer was built from.
 - `npurag watch <dir>` — re-index as files change; `npurag prune` drops entries whose
-  files are gone.
+  files are gone; `npurag status` says what the index holds and whether the backend is up.
 - `npurag mcp <dir>` — serve the index to an assistant over the Model Context Protocol,
   on stdin and stdout. No port, no daemon: the client launches it as a child process.
 - `npurag serve <dir>` — the same searches over HTTP, for callers that are not an

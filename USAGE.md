@@ -2,7 +2,8 @@
 
 npurag turns a folder on your machine into a searchable index. You can then search it by
 meaning rather than by exact words, and ask questions that are answered from your own
-files, with the excerpts each answer came from.
+files, with the excerpts each answer came from. You can also hand that index to something
+else — an assistant, a script, or a chat client — without any of it leaving the machine.
 
 Nothing is uploaded anywhere. The index is a single SQLite file on your disk, and the
 model that reads your text runs on your own machine.
@@ -32,7 +33,7 @@ Want to try npurag without any server at all? Add `--mock`. It uses a small buil
 stand-in that needs no hardware. Results are crude, but every command works, which makes
 it a good way to see the shape of things.
 
-## The four commands
+## The commands
 
 ### Index a folder
 
@@ -139,6 +140,9 @@ npurag prune               # drop entries for files that no longer exist
 `watch` waits for editing to settle before re-indexing, so saving a file once causes one
 update rather than several. If you would rather not keep a program running, schedule
 `npurag index` instead — on Linux the project ships systemd user units for exactly that.
+
+Everything above you run yourself. The three that follow hand the index to something else,
+and all of them keep it on this machine.
 
 ### Let an assistant search it
 
@@ -299,7 +303,7 @@ chat_model  = "gemma3:4b-int4-ov"
 
 Switch backends per command with `--backend intel-ovms`, or override just the address with
 `--base-url`. Any of `NPURAG_BACKEND`, `NPURAG_BASE_URL`, `NPURAG_EMBED_MODEL`,
-`NPURAG_CHAT_MODEL`, `NPURAG_RERANK_MODEL` and `NPURAG_DB` work as environment variables
+`NPURAG_CHAT_MODEL`, `NPURAG_RERANK_MODEL`, `NPURAG_TOKEN` and `NPURAG_DB` work as environment variables
 too. Command-line flags win over environment variables, which win over the config file.
 
 ## Which file types
@@ -331,6 +335,15 @@ searches for it literally; if you remember only the gist, `--mode vector` ignore
 entirely. `--rerank llm` will take a closer look at the shortlist, at the cost of a
 generation. Passage size is adjustable with `chunk_tokens`, and `--path` narrows the search
 when you know roughly where the answer lives.
+
+**`mcp` or `serve` says "no index for … yet".** Unlike `search`, these take the indexed
+directory as an argument, because whatever launches them chooses the working directory and
+you do not. Name the folder you indexed: `npurag mcp ~/Documents`.
+
+**An assistant does not see the tools.** Check the client's own log rather than the
+terminal: npurag writes protocol messages to stdout and everything else to stderr, and the
+client captures both separately. A wrong path to the binary and a folder that was never
+indexed are the two usual causes.
 
 **An index built by an older version.** It is upgraded in place the first time you open it:
 the full-text half is built from text the index already holds, so nothing is sent to the
