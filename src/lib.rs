@@ -11,6 +11,7 @@ pub mod backend;
 pub mod chunk;
 pub mod config;
 pub mod extract;
+pub mod http;
 pub mod index;
 pub mod lexical;
 pub mod mcp;

@@ -9,6 +9,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use npurag::ask::{ask, AskOptions};
 use npurag::backend::{Backend, MockBackend, OpenAiBackend};
 use npurag::config::{self, Config, Overrides};
+use npurag::http::{self, HttpOptions, Service};
 use npurag::index::{index_dir_with_progress, IndexOptions, Progress};
 use npurag::mcp::{serve, McpServer};
 use npurag::rerank::RerankMode;
@@ -123,6 +124,22 @@ enum Command {
         /// Indexed directory to serve; defaults to the current one.
         path: Option<PathBuf>,
     },
+    /// Answer HTTP requests against the index.
+    ///
+    /// For callers that are not an assistant — a script, a service, a cron job.
+    /// Listens on loopback unless told otherwise, and refuses to listen
+    /// anywhere else without a token.
+    Serve {
+        /// Indexed directory to serve; defaults to the current one.
+        path: Option<PathBuf>,
+        /// Address to listen on.
+        #[arg(long, value_name = "ADDR", default_value = http::DEFAULT_BIND)]
+        bind: String,
+        /// Bearer token callers must present. NPURAG_TOKEN is preferred: an
+        /// argument is visible to anyone who can list processes.
+        #[arg(long, value_name = "TOKEN")]
+        token: Option<String>,
+    },
     /// Re-index continuously as files change.
     Watch {
         path: PathBuf,
@@ -213,6 +230,17 @@ fn main() -> Result<()> {
             *json,
         ),
         Command::Mcp { path } => mcp_cmd(&config, cli.mock, path.as_deref()),
+        Command::Serve { path, bind, token } => serve_cmd(
+            &config,
+            cli.mock,
+            path.as_deref(),
+            HttpOptions {
+                bind: bind.clone(),
+                // The environment wins: a token on the command line shows up in
+                // `ps` for every other user on the machine.
+                token: std::env::var("NPURAG_TOKEN").ok().or_else(|| token.clone()),
+            },
+        ),
         Command::Prune => prune_cmd(&config),
         Command::Watch { path, debounce } => watch_cmd(&config, cli.mock, path, *debounce),
     }
@@ -457,12 +485,17 @@ fn watch_cmd(config: &Config, mock: bool, path: &Path, debounce_ms: u64) -> Resu
     )
 }
 
-/// Serve one index over MCP, on stdin and stdout.
+/// Open the index for a directory named on the command line.
 ///
-/// The directory is named by an argument rather than taken from the working
-/// directory the way `search` does it: an assistant launches this process, and
-/// where it happens to launch it from is not something the user chose.
-fn mcp_cmd(config: &Config, mock: bool, path: Option<&Path>) -> Result<()> {
+/// The serving commands take the directory as an argument rather than reading
+/// the working directory the way `search` does: whatever launches them —
+/// an assistant, a service manager — chooses that directory, and the user does
+/// not.
+fn named_index(
+    config: &Config,
+    mock: bool,
+    path: Option<&Path>,
+) -> Result<(Store, PathBuf, Active)> {
     let root = match path {
         Some(p) => p.to_path_buf(),
         None => std::env::current_dir()?,
@@ -480,6 +513,39 @@ fn mcp_cmd(config: &Config, mock: bool, path: Option<&Path>) -> Result<()> {
     let active = activate(config, mock)?;
     let store = Store::open(&db_path)?;
     store.ensure_model(&active.embed_model)?;
+    Ok((store, db_path, active))
+}
+
+/// Answer HTTP requests against one index.
+fn serve_cmd(config: &Config, mock: bool, path: Option<&Path>, options: HttpOptions) -> Result<()> {
+    let (store, db_path, active) = named_index(config, mock, path)?;
+
+    let service = Service {
+        store: &store,
+        backend: active.backend.as_ref(),
+        defaults: config.search_options(),
+        token: options.token.clone(),
+    };
+
+    http::serve(&service, &options, |address| {
+        // stderr, so that redirecting stdout to a log leaves the banner where a
+        // person can still see it.
+        eprintln!(
+            "npurag {} serving {} on http://{address}{}\nstop with Ctrl-C",
+            env!("CARGO_PKG_VERSION"),
+            db_path.display(),
+            if options.token.is_some() {
+                " (bearer token required)"
+            } else {
+                " (no token; loopback only)"
+            }
+        );
+    })
+}
+
+/// Serve one index over MCP, on stdin and stdout.
+fn mcp_cmd(config: &Config, mock: bool, path: Option<&Path>) -> Result<()> {
+    let (store, db_path, active) = named_index(config, mock, path)?;
 
     // Diagnostics go to stderr: stdout carries protocol messages and nothing
     // else, and a stray line there would break the client's parser.

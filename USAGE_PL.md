@@ -176,6 +176,46 @@ Wystawione są trzy narzędzia:
 `search` i `ask` przyjmują te same pokrętła co komendy: `k`, `path`, `mode` i `rerank`.
 Asystent, który potrzebuje dokładnego ciągu znaków, sam poprosi o `mode: "lexical"`.
 
+### Udostępnij indeks programowi
+
+```bash
+npurag serve ~/Dokumenty
+```
+
+Dla wołających, którzy nie są asystentem — skryptu, usługi, zadania z crona. Odpowiada pod
+`http://127.0.0.1:8787` tym samym JSON-em, który drukuje `--json`:
+
+```bash
+curl 'http://127.0.0.1:8787/search?q=retencja%20backupów&k=5'
+curl -H 'Content-Type: application/json' \
+     -d '{"question": "co ustaliłem w sprawie projektu X?"}' \
+     http://127.0.0.1:8787/ask
+```
+
+| Trasa | Działanie |
+|---|---|
+| `GET`/`POST` `/search` | Pasujące fragmenty, tak jak zwraca je `search --json` |
+| `GET`/`POST` `/ask` | Odpowiedź ze źródłami, tak jak zwraca ją `ask --json` |
+| `GET` `/status` | Co obejmuje indeks i czy backend odpowiada |
+| `GET` `/health` | Żyje czy nie — bez żadnych poświadczeń |
+
+Argumenty idą w query stringu albo w ciele JSON: `q` (lub `query`/`question`), `k`, `path`,
+`mode`, `rerank`, a dla `/ask` również `model`. Gdy podasz oba, wygrywa ciało.
+
+**Przez ten port czyta się cały indeks.** Dlatego domyślnie nasłuchuje wyłącznie na
+loopbacku i **odmówi** nasłuchiwania gdziekolwiek indziej, dopóki nie ustawisz tokenu:
+
+```bash
+NPURAG_TOKEN=$(openssl rand -hex 16) npurag serve ~/Dokumenty --bind 0.0.0.0:8787
+```
+
+Wołający wysyła wtedy `Authorization: Bearer <token>`. Używaj zmiennej środowiskowej, nie
+`--token`: argument widzi każdy, kto potrafi wylistować procesy. `/health` zostaje otwarte,
+żeby monitoring mógł sondować bez trzymania poświadczeń.
+
+Żądania obsługiwane są pojedynczo. To indeks osobisty, nie serwis webowy, a drugie żądanie
+czekające na pierwsze jest lepszym kompromisem niż pula uchwytów do bazy.
+
 ## Gdzie co leży
 
 - **Indeks** — `~/.local/share/npurag/<id>/index.db` na Linuksie,

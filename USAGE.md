@@ -180,6 +180,46 @@ Three tools are exposed:
 `search` and `ask` accept the same knobs as the commands: `k`, `path`, `mode` and
 `rerank`. An assistant that needs an exact string can ask for `mode: "lexical"` itself.
 
+### Let a program query it
+
+```bash
+npurag serve ~/Documents
+```
+
+For callers that are not an assistant — a script, a service, a cron job. It answers on
+`http://127.0.0.1:8787` with the same JSON `--json` prints:
+
+```bash
+curl 'http://127.0.0.1:8787/search?q=backup%20retention&k=5'
+curl -H 'Content-Type: application/json' \
+     -d '{"question": "what did I decide about project X?"}' \
+     http://127.0.0.1:8787/ask
+```
+
+| Route | What it does |
+|---|---|
+| `GET`/`POST` `/search` | The matching passages, as `search --json` returns them |
+| `GET`/`POST` `/ask` | An answer with its sources, as `ask --json` returns it |
+| `GET` `/status` | What the index covers, and whether the backend is reachable |
+| `GET` `/health` | Alive-or-not, with no credential needed |
+
+Arguments go in the query string or in a JSON body — `q` (or `query`/`question`), `k`,
+`path`, `mode`, `rerank`, and `model` for `/ask`. When both are given, the body wins.
+
+**Everything in the index is readable through this port.** It therefore listens only on
+loopback by default, and it will **refuse** to listen anywhere else unless you set a token:
+
+```bash
+NPURAG_TOKEN=$(openssl rand -hex 16) npurag serve ~/Documents --bind 0.0.0.0:8787
+```
+
+Callers then send `Authorization: Bearer <token>`. Prefer the environment variable over
+`--token`: an argument is visible to anyone who can list processes. `/health` stays open so
+a monitor can probe it without holding a credential.
+
+Requests are answered one at a time. This is a personal index, not a web service, and a
+second request waiting on the first is a better trade than a pool of database handles.
+
 ## Where things live
 
 - **Index** — `~/.local/share/npurag/<id>/index.db` on Linux,

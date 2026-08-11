@@ -32,6 +32,8 @@ what to do when something looks wrong. Po polsku: [`USAGE_PL.md`](./USAGE_PL.md)
   files are gone.
 - `npurag mcp <dir>` — serve the index to an assistant over the Model Context Protocol,
   on stdin and stdout. No port, no daemon: the client launches it as a child process.
+- `npurag serve <dir>` — the same searches over HTTP, for callers that are not an
+  assistant. Loopback by default, and it refuses to bind wider without a token.
 
 For a scheduled refresh instead of a running process, see the systemd user units in
 [`contrib/systemd`](./contrib/systemd).
@@ -64,8 +66,9 @@ extractors, since a downloaded binary cannot have Cargo features turned on after
 
 ## Build
 
-Built in milestones (M0–M8): skeleton & backend → index → search → ask (RAG) →
-extractors → freshness → scale → hybrid retrieval and reranking → MCP server.
+Built in milestones (M0–M9): skeleton & backend → index → search → ask (RAG) →
+extractors → freshness → scale → hybrid retrieval and reranking → MCP server →
+HTTP endpoint.
 
 ```bash
 cargo build

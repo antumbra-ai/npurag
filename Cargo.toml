@@ -32,6 +32,7 @@ dotext = { version = "0.1.1", optional = true }
 notify = "8.2.0"
 indicatif = "0.18.6"
 simsimd = { version = "6.5.16", optional = true }
+tiny_http = "0.12.0"
 
 [features]
 # Extractors are opt-in: they pull heavy dependency trees, and an index of
