@@ -6,12 +6,13 @@ use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use indicatif::{ProgressBar, ProgressStyle};
 
-use npurag::ask::{ask, origin_of, AskOptions};
+use npurag::ask::{ask, AskOptions};
 use npurag::backend::{Backend, MockBackend, OpenAiBackend};
 use npurag::config::{self, Config, Overrides};
 use npurag::index::{index_dir_with_progress, IndexOptions, Progress};
+use npurag::mcp::{serve, McpServer};
 use npurag::rerank::RerankMode;
-use npurag::search::{search, Scores, SearchMode, SearchOptions};
+use npurag::search::{search, search_payload, Scores, SearchMode, SearchOptions};
 use npurag::store::Store;
 use npurag::watch::{watch, Pipeline, WatchOptions};
 
@@ -114,6 +115,14 @@ enum Command {
     },
     /// Drop index entries whose files are gone.
     Prune,
+    /// Serve the index to an assistant over the Model Context Protocol.
+    ///
+    /// Speaks JSON-RPC on stdin and stdout; the client launches this. Nothing
+    /// listens on a port.
+    Mcp {
+        /// Indexed directory to serve; defaults to the current one.
+        path: Option<PathBuf>,
+    },
     /// Re-index continuously as files change.
     Watch {
         path: PathBuf,
@@ -203,6 +212,7 @@ fn main() -> Result<()> {
             !*no_sources,
             *json,
         ),
+        Command::Mcp { path } => mcp_cmd(&config, cli.mock, path.as_deref()),
         Command::Prune => prune_cmd(&config),
         Command::Watch { path, debounce } => watch_cmd(&config, cli.mock, path, *debounce),
     }
@@ -324,11 +334,7 @@ fn search_cmd(
     let hits = search(&store, active.backend.as_ref(), query, &options)?;
 
     if json {
-        let payload = serde_json::json!({
-            "query": query,
-            "origin": origin_of(&store)?,
-            "hits": hits,
-        });
+        let payload = search_payload(&store, query, &hits)?;
         return emit(&format!("{}\n", serde_json::to_string_pretty(&payload)?));
     }
 
@@ -449,6 +455,46 @@ fn watch_cmd(config: &Config, mock: bool, path: &Path, debounce_ms: u64) -> Resu
             }
         },
     )
+}
+
+/// Serve one index over MCP, on stdin and stdout.
+///
+/// The directory is named by an argument rather than taken from the working
+/// directory the way `search` does it: an assistant launches this process, and
+/// where it happens to launch it from is not something the user chose.
+fn mcp_cmd(config: &Config, mock: bool, path: Option<&Path>) -> Result<()> {
+    let root = match path {
+        Some(p) => p.to_path_buf(),
+        None => std::env::current_dir()?,
+    };
+    let root = root.canonicalize().unwrap_or(root);
+    let db_path = config.db_path_for(&root)?;
+    if !db_path.is_file() {
+        bail!(
+            "no index for {} yet — run `npurag index {}` before serving it",
+            root.display(),
+            root.display()
+        );
+    }
+
+    let active = activate(config, mock)?;
+    let store = Store::open(&db_path)?;
+    store.ensure_model(&active.embed_model)?;
+
+    // Diagnostics go to stderr: stdout carries protocol messages and nothing
+    // else, and a stray line there would break the client's parser.
+    eprintln!(
+        "npurag {} serving {} over MCP on stdin/stdout",
+        env!("CARGO_PKG_VERSION"),
+        db_path.display()
+    );
+
+    let server = McpServer {
+        store: &store,
+        backend: active.backend.as_ref(),
+        defaults: config.search_options(),
+    };
+    serve(&server, std::io::stdin().lock(), std::io::stdout().lock())
 }
 
 fn ask_cmd(

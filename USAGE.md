@@ -140,6 +140,46 @@ npurag prune               # drop entries for files that no longer exist
 update rather than several. If you would rather not keep a program running, schedule
 `npurag index` instead — on Linux the project ships systemd user units for exactly that.
 
+### Let an assistant search it
+
+```bash
+npurag mcp ~/Documents
+```
+
+This serves the index over the **Model Context Protocol**, so an assistant can search your
+files itself instead of you pasting excerpts into it. It is not a background service:
+nothing listens on a port, and you do not run this command yourself. The assistant launches
+npurag as a child process and talks to it over a pipe, which is why the whole arrangement
+stays on your machine.
+
+Point a client at it by adding this to its MCP configuration:
+
+```json
+{
+  "mcpServers": {
+    "npurag": {
+      "command": "npurag",
+      "args": ["mcp", "/home/you/Documents"]
+    }
+  }
+}
+```
+
+Use the full path to the binary if it is not on the `PATH` the client sees, and name the
+folder you indexed — unlike `search`, this command does not guess it from the working
+directory, because the working directory is chosen by the client rather than by you.
+
+Three tools are exposed:
+
+| Tool | What it does |
+|---|---|
+| `search` | Returns the matching passages themselves, with the file each came from |
+| `ask` | Has the local model write an answer from those passages, with its sources |
+| `status` | Reports what the index covers and whether the backend is reachable |
+
+`search` and `ask` accept the same knobs as the commands: `k`, `path`, `mode` and
+`rerank`. An assistant that needs an exact string can ask for `mode: "lexical"` itself.
+
 ## Where things live
 
 - **Index** — `~/.local/share/npurag/<id>/index.db` on Linux,

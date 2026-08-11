@@ -30,6 +30,8 @@ what to do when something looks wrong. Po polsku: [`USAGE_PL.md`](./USAGE_PL.md)
   excerpts each answer was built from.
 - `npurag watch <dir>` — re-index as files change; `npurag prune` drops entries whose
   files are gone.
+- `npurag mcp <dir>` — serve the index to an assistant over the Model Context Protocol,
+  on stdin and stdout. No port, no daemon: the client launches it as a child process.
 
 For a scheduled refresh instead of a running process, see the systemd user units in
 [`contrib/systemd`](./contrib/systemd).
@@ -62,8 +64,8 @@ extractors, since a downloaded binary cannot have Cargo features turned on after
 
 ## Build
 
-Built in milestones (M0–M7): skeleton & backend → index → search → ask (RAG) →
-extractors → freshness → scale → hybrid retrieval and reranking.
+Built in milestones (M0–M8): skeleton & backend → index → search → ask (RAG) →
+extractors → freshness → scale → hybrid retrieval and reranking → MCP server.
 
 ```bash
 cargo build

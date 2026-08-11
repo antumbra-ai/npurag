@@ -136,6 +136,46 @@ npurag prune               # usuwa wpisy plików, których już nie ma
 a nie kilka. Jeśli wolisz nie trzymać uruchomionego programu, zaplanuj `npurag index` —
 na Linuksie projekt dostarcza gotowe unity systemd-user właśnie do tego.
 
+### Udostępnij indeks asystentowi
+
+```bash
+npurag mcp ~/Dokumenty
+```
+
+To wystawia indeks po **Model Context Protocol**, dzięki czemu asystent sam przeszukuje
+twoje pliki, zamiast czekać, aż wkleisz mu fragmenty. To nie jest usługa w tle: nic nie
+nasłuchuje na porcie i nie uruchamiasz tego polecenia ręcznie. Asystent odpala npuraga jako
+proces potomny i rozmawia z nim przez potok — i właśnie dlatego całość zostaje na twojej
+maszynie.
+
+Klienta podłączasz wpisem w jego konfiguracji MCP:
+
+```json
+{
+  "mcpServers": {
+    "npurag": {
+      "command": "npurag",
+      "args": ["mcp", "/home/ty/Dokumenty"]
+    }
+  }
+}
+```
+
+Podaj pełną ścieżkę do binarki, jeśli nie leży na `PATH`, który widzi klient, i wskaż
+katalog, który zaindeksowałeś — inaczej niż `search`, ta komenda nie zgaduje go z katalogu
+bieżącego, bo katalog bieżący wybiera klient, a nie ty.
+
+Wystawione są trzy narzędzia:
+
+| Narzędzie | Działanie |
+|---|---|
+| `search` | Zwraca same pasujące fragmenty wraz z plikiem, z którego pochodzą |
+| `ask` | Każe lokalnemu modelowi napisać odpowiedź z tych fragmentów, ze źródłami |
+| `status` | Mówi, co obejmuje indeks i czy backend odpowiada |
+
+`search` i `ask` przyjmują te same pokrętła co komendy: `k`, `path`, `mode` i `rerank`.
+Asystent, który potrzebuje dokładnego ciągu znaków, sam poprosi o `mode: "lexical"`.
+
 ## Gdzie co leży
 
 - **Indeks** — `~/.local/share/npurag/<id>/index.db` na Linuksie,

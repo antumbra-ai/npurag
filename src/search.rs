@@ -384,6 +384,19 @@ pub fn search(
     Ok(hits)
 }
 
+/// The machine-readable form of a search: what was asked, which index answered,
+/// and what came back.
+///
+/// One definition shared by `--json` and the MCP tool, so the two can never
+/// describe the same search differently.
+pub fn search_payload(store: &Store, query: &str, hits: &[Hit]) -> Result<serde_json::Value> {
+    Ok(serde_json::json!({
+        "query": query,
+        "origin": crate::ask::origin_of(store)?,
+        "hits": hits,
+    }))
+}
+
 impl Fused {
     fn from_vector(candidate: Scored) -> Self {
         Self {
